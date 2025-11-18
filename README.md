@@ -65,7 +65,7 @@ Please cite with the following BibTeX:
 @inproceedings{sarto2025image,
   title={{Image Captioning Evaluation in the Age of Multimodal LLMs: Challenges and Future Perspectives}},
   author={Sarto, Sara and Cornia, Marcella and Cucchiara, Rita},
-  booktitle={arxiv}
+  booktitle={International Joint Conference on Artificial Intelligence (IJCAI)}
   year={2025}
 }
 ```
