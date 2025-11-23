@@ -1,9 +1,16 @@
-
 import torch
 import numpy as np
 from .base_metric import BaseMetric
+from collections import defaultdict
 
 from bert_score import score
+from bert_score.utils import (
+    get_bert_embedding,
+    get_tokenizer,
+    get_model,
+    lang2model,
+    model2layers)
+
 
 class BertScoreBasic(BaseMetric):
 
@@ -37,11 +44,74 @@ class BertScoreBasic(BaseMetric):
 
 class BertScoreImproved(BaseMetric):
 
-    def __init__(self, lang="en"):
+    def __init__(self,
+                 lang="en",
+                 device="cuda" if torch.cuda.is_available() else "cpu",
+                 ):
         self.lang = lang
+        self.device = device
+        # device = "cuda" if torch.cuda.is_available() else "cpu"
 
     def setup(self):
-        pass # doing nothing at the moment
+        model_type = lang2model[self.lang] # "roberta-large"
+        num_layers = model2layers[model_type] # 17 for RoBERTa Large
+        self.model = get_model(model_type, num_layers).to(self.device)
+        self.tokenizer = get_tokenizer(model_type, True)
+
 
     def compute_score(self, ims_cs, gen_cs, gts_cs=None, gts=None, gen=None):
+        idf_dict = defaultdict(lambda: 1.0)
+        # set idf for [SEP] and [CLS] to 0
+        idf_dict[self.tokenizer.sep_token_id] = 0
+        idf_dict[self.tokenizer.cls_token_id] = 0
+
+        ensembled_ref_matrix = self.get_ensemble_reference_word_vectors(
+                    gts, idf_dict, all_layers=False, default_threshold=0.83
+                )
         pass
+
+    def get_ensembled_reference(self,
+                                refs,
+                                idf_dict,
+                                default_threshold=0.83,
+                                all_layers=False
+                                ):
+        '''
+            refs: list of reference sentences
+            model: bert model
+            idf_dict: dictionary of idf values for each token
+            default_threshold=0.83, recommended threshold for RoBERTa (Large) produce 1024 dimension for each word
+            all_layers=False: whether to return all layers or just the last layer
+
+            return: emsembled_ref_matrix: (K', 1024) matrix of reference word vectors
+            where K' is the number of unique tokens in all references (after removing similar tokens)
+        '''
+        embedding, mask, padded_idf = get_bert_embedding(
+            refs, model,
+            self.tokenizer, idf_dict,
+            device=self.device, all_layers=all_layers)
+        embeded_ref_norm  = embedding / (embedding * embedding).sum(axis=2, keepdims=True).sqrt()
+        # token_vectors = (torch.unsqueeze(embeded_ref[1], 2) * embeded_ref_norm)  # (5, N, 1024)
+
+        emsembled_ref_matrix = embeded_ref_norm[0][padded_idf[0].bool()] # initialize with the first reference
+        # emsembled_ref_matrix: (K', 1024), where K' is the number of tokens in the first reference
+
+        for i in range(1, embeded_ref_norm.shape[0]):
+            # will update the K' in emsembled_ref_matrix to add more new tokens if there are any
+            current_ref_matrix = embeded_ref_norm[i][padded_idf[i].bool()] # (K, 1024)
+            # print(f"shape of reference {i}", current_ref_matrix.shape)
+            confusion_mat = emsembled_ref_matrix @ current_ref_matrix.T
+
+            assert torch.all(confusion_mat <= torch.tensor(1.0)) and torch.all(confusion_mat >= torch.tensor(-1.0))
+
+            max_val_sim, _ = torch.max(confusion_mat, dim=0)
+
+            assert current_ref_matrix.shape[0] == confusion_mat.shape[1]
+            assert current_ref_matrix.shape[0] == max_val_sim.shape[0]
+
+            selected_word_vectors = current_ref_matrix[max_val_sim < default_threshold] # max cosine similarity of each word in current_ref_matrix with all words in emsembled_ref_matrix)
+            emsembled_ref_matrix = torch.cat((emsembled_ref_matrix, selected_word_vectors), dim=0)
+
+        assert (emsembled_ref_matrix * emsembled_ref_matrix).sum(axis=1).sqrt().min().item() > 0.99
+        return emsembled_ref_matrix
+
