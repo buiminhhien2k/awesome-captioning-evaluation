@@ -17,6 +17,9 @@ class BertScoreBasic(BaseMetric):
     def __init__(self, lang="en"):
         self.lang = lang
 
+    def load_model(self):
+        pass
+
     def setup(self, use_tfidf=False):
         self.use_tfidf = use_tfidf
         # if not using tfidf, all words/tokens will be treated with same weight
@@ -27,20 +30,27 @@ class BertScoreBasic(BaseMetric):
             please refer to this `score` method from the original author
             https://github.com/Tiiiger/bert_score/blob/master/bert_score/score.py
             the length of the `gts` and
-        :param ims_cs: List<String>, each string is a path to the image
-        :param gen_cs: List<List<String>>, tokenized each candidate captions
-        :param gts_cs: tokenized each reference captions
-        :param gts: List<String>/List<List<String>>, list ground truth (reference) captions
-        :param gen: List<String>, list candidate captions
+        :param ims_cs: list of string: list of image_path
+            ims_cs[i] is a path caption of image i-th
+        :param gen_cs: list of string: list of candidate captions
+            gen_cs[i] is a candidate caption of image i-th
+        :param gts_cs: list of list of string: list of list of reference caption
+            gts_cs[i] is a list of reference caption of image i-th
+        :param gts:
+        :param gen:
         :return:
         """
-        P_bert, R_bert, F_bert = score(
-            cands=gen,
-            refs=gts,
+        scores = dict()
+        # for refs, cand in zip(gts_cs, gen_cs):
+        p, r, f1 = score(
+            cands=gen_cs,
+            refs=gts_cs,
             lang=self.lang,
             idf=self.use_tfidf
         )
-        return np.mean(F_bert)
+
+        scores[f"{self.__class__.__name__} F1-score"] = f1.mean()
+        return scores
 
 class BertScoreImproved(BaseMetric):
 
@@ -52,42 +62,48 @@ class BertScoreImproved(BaseMetric):
         self.device = device
         # device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    def setup(self):
-        model_type = lang2model[self.lang] # "roberta-large"
-        num_layers = model2layers[model_type] # 17 for RoBERTa Large
+    def load_model(self, model_type, num_layers):
         self.model = get_model(model_type, num_layers).to(self.device)
         self.tokenizer = get_tokenizer(model_type, True)
 
+    def setup(self):
+        model_type = lang2model[self.lang] # "roberta-large"
+        num_layers = model2layers[model_type] # 17 for RoBERTa Large
+        self.load_model(model_type, num_layers)
 
     def compute_score(self, ims_cs, gen_cs, gts_cs=None, gts=None, gen=None):
         """
 
-        :param ims_cs:
-        :param gen_cs:
-        :param gts_cs:
-        :param gts: list of list of string: list of list of reference caption
-            gts[i] is a list of reference caption of image i-th
-        :param gen: list of string: list of candidate captions
-            gen[i] is a candidate caption of image i-th
+        :param ims_cs: list of string: list of image_path
+        :param gen_cs: list of string: list of candidate captions
+            gen_cs[i] is a candidate caption of image i-th
+        :param gts_cs: list of list of string: list of list of reference caption
+            gts_cs[i] is a list of reference caption of image i-th
+        :param gts:
+        :param gen:
         :return:
         """
         idf_dict = defaultdict(lambda: 1.0)
         # set idf for [SEP] and [CLS] to 0
         idf_dict[self.tokenizer.sep_token_id] = 0
         idf_dict[self.tokenizer.cls_token_id] = 0
-        # TODO: allow customised idf dict based on reference captions
+        # TODO: allow idf weight based on reference captions like BertScoreBasic
 
         assert len(gts) == len(gen), "two `gts` and `gen` are not the same length"
 
         bert_scores = list()
-        for refs, cand in zip(gts, gen):
+        scores = dict()
+        for refs, cand in zip(gts_cs[:10], gen_cs[:10]):
             ensembled_ref_matrix = self.get_ensemble_reference_word_vectors(
                 refs, idf_dict, all_layers=False, default_threshold=0.83
             )
             vectored_cand_matrix = self.get_candidate_word_vectors(cand, idf_dict)
             p, r, f1 = self.compute_precision_recall_f1(ensembled_ref_matrix, vectored_cand_matrix)
             bert_scores.append(f1)
-        return sum(bert_scores) / len(bert_scores)
+
+        scores[f"{self.__class__.__name__} F1-score"] = np.mean(bert_scores)
+
+        return scores
 
     def get_ensemble_reference_word_vectors(self,
                                 refs,
@@ -186,4 +202,3 @@ class BertScoreImproved(BaseMetric):
             f1 = 2 * (precision * recall) / (precision + recall)
 
         return precision, recall, f1
-
