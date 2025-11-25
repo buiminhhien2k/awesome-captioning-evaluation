@@ -5,6 +5,11 @@ import os
 
 from utils.utils import prepare_json, get_metric
 
+ACCEPTED_METRIC_TYPES = [
+    "clip-score", "pac-score", "pac-score++",
+    "polos", "standard", "bert-score", "bert-score++"
+]
+
 if __name__ == '__main__':
     # Argument parsing
     parser = argparse.ArgumentParser(description='Evaluation')

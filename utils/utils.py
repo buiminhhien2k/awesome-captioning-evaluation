@@ -5,7 +5,7 @@ import os
 from metrics.clip_score import ClipScoreMetric
 from metrics.polos import PolosMetric
 from metrics.standard import StandardMetric
-
+from metrics.bert_score import BertScoreBasic, BertScoreImproved
 
 def collate_fn(batch):
     if isinstance(batch, tuple) and isinstance(batch[0], list):
@@ -67,5 +67,9 @@ def get_metric(name, **kwargs):
         return PolosMetric(device=kwargs.get("device"))
     elif name == "standard":
         return StandardMetric()
+    elif name == "bert-score":
+        return BertScoreBasic("en")
+    elif name == "bert-score++":
+        return BertScoreImproved("en")
     else:
         raise ValueError(f"Unknown metric: {name}")

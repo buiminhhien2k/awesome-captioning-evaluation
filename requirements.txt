@@ -6,6 +6,7 @@ antlr4-python3-runtime==4.8
 appdirs==1.4.4
 async-timeout==4.0.3
 attrs==23.2.0
+bert-score==0.3.13
 bitarray==2.9.2
 braceexpand==0.1.7
 Brotli @ file:///croot/brotli-split_1714483155106/work
