@@ -60,17 +60,36 @@ class BertScoreImproved(BaseMetric):
 
 
     def compute_score(self, ims_cs, gen_cs, gts_cs=None, gts=None, gen=None):
+        """
+
+        :param ims_cs:
+        :param gen_cs:
+        :param gts_cs:
+        :param gts: list of list of string: list of list of reference caption
+            gts[i] is a list of reference caption of image i-th
+        :param gen: list of string: list of candidate captions
+            gen[i] is a candidate caption of image i-th
+        :return:
+        """
         idf_dict = defaultdict(lambda: 1.0)
         # set idf for [SEP] and [CLS] to 0
         idf_dict[self.tokenizer.sep_token_id] = 0
         idf_dict[self.tokenizer.cls_token_id] = 0
+        # TODO: allow customised idf dict based on reference captions
 
-        ensembled_ref_matrix = self.get_ensemble_reference_word_vectors(
-                    gts, idf_dict, all_layers=False, default_threshold=0.83
-                )
-        pass
+        assert len(gts) == len(gen), "two `gts` and `gen` are not the same length"
 
-    def get_ensembled_reference(self,
+        bert_scores = list()
+        for refs, cand in zip(gts, gen):
+            ensembled_ref_matrix = self.get_ensemble_reference_word_vectors(
+                refs, idf_dict, all_layers=False, default_threshold=0.83
+            )
+            vectored_cand_matrix = self.get_candidate_word_vectors(cand, idf_dict)
+            p, r, f1 = self.compute_precision_recall_f1(ensembled_ref_matrix, vectored_cand_matrix)
+            bert_scores.append(f1)
+        return sum(bert_scores) / len(bert_scores)
+
+    def get_ensemble_reference_word_vectors(self,
                                 refs,
                                 idf_dict,
                                 default_threshold=0.83,
@@ -78,7 +97,6 @@ class BertScoreImproved(BaseMetric):
                                 ):
         '''
             refs: list of reference sentences
-            model: bert model
             idf_dict: dictionary of idf values for each token
             default_threshold=0.83, recommended threshold for RoBERTa (Large) produce 1024 dimension for each word
             all_layers=False: whether to return all layers or just the last layer
@@ -87,7 +105,7 @@ class BertScoreImproved(BaseMetric):
             where K' is the number of unique tokens in all references (after removing similar tokens)
         '''
         embedding, mask, padded_idf = get_bert_embedding(
-            refs, model,
+            refs, self.model,
             self.tokenizer, idf_dict,
             device=self.device, all_layers=all_layers)
         embeded_ref_norm  = embedding / (embedding * embedding).sum(axis=2, keepdims=True).sqrt()
@@ -114,4 +132,58 @@ class BertScoreImproved(BaseMetric):
 
         assert (emsembled_ref_matrix * emsembled_ref_matrix).sum(axis=1).sqrt().min().item() > 0.99
         return emsembled_ref_matrix
+
+    def get_candidate_word_vectors(self,
+        cand,
+        idf_dict,
+        all_layers=False
+    ):
+        '''
+        cand: candidate sentence
+        model: bert model
+        tokenizer: bert tokenizer
+        idf_dict: dictionary of idf values for each token
+        device: device to run the model on
+        all_layers: whether to return all layers or just the last layer
+
+        return: cand_matrix: (K, 1024) matrix of candidate word vectors
+        where K is the number of tokens in the candidate sentence
+        '''
+        embedding, mask, padd = get_bert_embedding(
+            cand,
+            self.model,
+            self.tokenizer,
+            idf_dict,
+            device=self.device,
+            all_layers=all_layers)
+        # embeded_cand: (layers, 1, max_len, hidden_size) if all_layers is True
+        # or (1, 1, max_len, hidden_size) if all_layers is False
+
+        embeded_cand_norm  = embedding / (embedding * embedding).sum(axis=2, keepdims=True).sqrt()
+        cand_matrix = embeded_cand_norm[padd.bool()] # (K, 1024)
+
+        assert (cand_matrix * cand_matrix).sum(axis=1).sqrt().min().item() > 0.99
+        return cand_matrix
+
+    def compute_precision_recall_f1(self, ensembled_ref_matrix, cand_matrix):
+        '''
+        ensembled_ref_matrix: (K', 1024) matrix of reference word vectors
+        cand_matrix: (K, 1024) matrix of candidate word vectors
+
+        return: precision, recall, f1
+        '''
+        confusion_mat = cand_matrix @ ensembled_ref_matrix.T
+        assert torch.all(confusion_mat <= torch.tensor(1.0)) and torch.all(confusion_mat >= torch.tensor(-1.0))
+
+        max_val_sim_cand, _ = torch.max(confusion_mat, dim=1)
+        max_val_sim_ref, _ = torch.max(confusion_mat, dim=0)
+
+        precision = max_val_sim_cand.mean().item()
+        recall = max_val_sim_ref.mean().item()
+        if precision + recall == 0:
+            f1 = 0.0
+        else:
+            f1 = 2 * (precision * recall) / (precision + recall)
+
+        return precision, recall, f1
 
