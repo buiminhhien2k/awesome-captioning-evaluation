@@ -93,7 +93,7 @@ class BertScoreImproved(BaseMetric):
 
         bert_scores = list()
         scores = dict()
-        for refs, cand in zip(gts_cs[:10], gen_cs[:10]):
+        for refs, cand in zip(gts_cs, gen_cs):
             ensembled_ref_matrix = self.get_ensemble_reference_word_vectors(
                 refs, idf_dict, all_layers=False, default_threshold=0.83
             )
