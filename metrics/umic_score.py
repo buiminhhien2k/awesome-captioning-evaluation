@@ -1,14 +1,20 @@
+from detectron2.engine import DefaultPredictor
+from detectron2.config import get_cfg
+from detectron2.data import transforms as T
+from detectron2 import model_zoo
+"""
+    HOW TO INSTALL Detectron2? if you cannot install with the standard method like this
+    [instruction](https://detectron2.readthedocs.io/en/latest/tutorials/install.html)
+    please review this
+    [discussion](https://github.com/facebookresearch/detectron2/discussions/5200).
+    this is how I installed Detectron2
+    pip install --extra-index-url https://miropsota.github.io/torch_packages_builder detectron2==0.6+18f6958pt2.8.0cu129
+"""
 import torch
 import numpy as np
 from torch import device
 
 from .base_metric import BaseMetric
-
-from detectron2.engine import DefaultPredictor
-from detectron2.config import get_cfg
-from detectron2.data import transforms as T
-from detectron2 import model_zoo
-
 from transformers import BertTokenizer
 
 from models.uniter.model import UniterModel
@@ -24,11 +30,14 @@ class UmicScore(BaseMetric):
     That is the major difference from this class to the [UMIC](https://github.com/hwanheelee1993/UMIC).
     The original work already pre-embedded images of the common datasets like: COMPOSITE, FLICKR, etc.
     Because this class serve a more generic purpose so it would take longer time to run since
-    it requires detectron2 to detect the bounding boxes and its corresponding feature vectors
+    it requires Detectron2 to detect the bounding boxes and its corresponding feature vectors
     in any images (please view the UNITER model on how to use detectron2)
     """
 
     def __init__(self, rcnn_file="faster_rcnn_R_101_FPN_3x.yaml"):
+        """
+        :param rcnn_file: name of yaml file to configure detectron2
+        """
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.rcnn_file = rcnn_file
         self.IMAGE_DIM = 1024 if self.rcnn_file == "faster_rcnn_R_101_FPN_3x.yaml" else 2048
@@ -57,7 +66,6 @@ class UmicScore(BaseMetric):
         self.rank_output = torch.nn.Linear(self.umicModel.config.hidden_size, 1).cuda()
         self.pooler = self.umicModel.pooler
 
-        # pass
 
     def compute_score(
             self,
@@ -81,6 +89,8 @@ class UmicScore(BaseMetric):
         rank_scores = list()
 
         for img_path, cand_cap in zip(ims_cs, gen_cs):
+            # TODO: This version is currently calculate UMIC score for 1-by-1 image, next task is to
+            #  use dataloader to process data in batch.
             image = self.read_image(img_path)
             img_feat, img_box = self.imageEmbedder.embed_image(image)
             img_mask = torch.ones(1, img_feat.shape[1], dtype=torch.long).to(self.device)
@@ -114,8 +124,6 @@ class UmicScore(BaseMetric):
         # this step is refer to UMIC repository
         umic_score = [1/(1+math.exp(-rank_score)) for rank_score in rank_scores] # sigmoid
 
-
-            # print(img_feat.shape, img_box.shape, cand_input_ids.size(1), position_ids)
         return {"umic-score": sum(umic_score)/ len(umic_score)}
 
     def read_image(self, image_path):
@@ -129,7 +137,18 @@ class ImageFeatureEmbedder:
         img_feat: (1, N, 2048)
         img_pos:  (1, N, 7)
     """
-    def __init__(self, device="cuda", file="faster_rcnn_R_101_C4_3x.yaml"):
+    def __init__(self, device="cuda", file="faster_rcnn_R_101_FPN_3x.yaml"):
+        """
+        :param device: suggest to have cuda environment to load detectron model
+        :param file: name of the detectron config file, if you use other configurations, make sure to place it in
+            config/COCO-Detection folder and its base config in config/ folder. For example, I put
+            `faster_rcnn_R_101_FPN_3x.yaml` in config/COCO-Detection/ and `Base-RCNN-FPN.yaml` in config/
+            You can download other config from https://github.com/facebookresearch/detectron2/tree/main/configs.
+            However, please adjust `UmicScore.IMAGE_DIM` and potentially make change to ImageFeatureEmbedder.embed_image
+            corresponding to the dimension output of your configuration selection. The UMIC author seems to use
+            `faster_rcnn_R_101_C4_3x.yaml` producing 2048 IMAGE_DIM but in this repository I chose
+            `faster_rcnn_R_101_FPN_3x.yaml` producing 1024 IMAGE DIM
+        """
         self.device = device
 
         # Load Faster R-CNN R101 FPN config
@@ -153,7 +172,8 @@ class ImageFeatureEmbedder:
 
     def _boxes_to_uniter_7d(self, boxes, img_h, img_w):
         """
-        Convert (N,4) → (N,7): [x1, y1, x2, y2, area, W, H]
+        Convert (N,4) → (N,7): [x1, y1, x2, y2, W, H, area]
+        reference from UNITER model paper https://arxiv.org/pdf/1909.11740
         """
         x1, y1, x2, y2 = (
             boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
@@ -162,9 +182,9 @@ class ImageFeatureEmbedder:
 
         pos = np.stack([
             x1, y1, x2, y2,
-            area,
             np.full_like(area, img_w),
-            np.full_like(area, img_h)
+            np.full_like(area, img_h),
+            area
         ], axis=1)
 
         return pos  # (N, 7)
@@ -172,7 +192,7 @@ class ImageFeatureEmbedder:
     def embed_image(self, img):
         """
         :param pil_image: PIL.Image instance, RGB
-        :return: (1, N, 2048) features, (1, N, 7) positional features
+        :return: a tuple of 2: (1, N, 2048) features, (1, N, 7) positional features. Normally, N is 1000
         """
 
         img_h, img_w = img.shape[:2]
@@ -223,7 +243,7 @@ class ImageFeatureEmbedder:
         img_feat = region_features[None, :, :]   # (1, N, 1024)
         img_pos  = pos_7d[None, :, :]            # (1, N, 7)
 
-        assert img_feat.shape[2] == 1024, "dimension of image feature is not 1024"
+        # assert img_feat.shape[2] == 1024, "dimension of image feature is not 1024"
         assert img_pos.shape[2] == 7, "dimension of image box is not 7"
         assert img_feat.shape[1] == img_pos.shape[1], "N is not equal for img_feat and img_pos"
 
@@ -232,10 +252,24 @@ class ImageFeatureEmbedder:
 
 class CandidateCaptionEmbedder:
     def __init__(self, device="cuda"):
+        """
+        This class is a rework from UMIC repository, please check their original work in
+        https://github.com/hwanheelee1993/UMIC/blob/master/make_txt_db.py
+        :param device:
+        """
         self.device = device
         self.tokenizer = BertTokenizer.from_pretrained("google-bert/bert-base-uncased")
 
     def tokenize(self, cand_caption):
+        """
+        This function is basically just to "map" each token/word into a single number.
+        The original work of UMIC author was to do it manually which does not include the [CLS]-101
+        and [SEP]-102 token. Original version is
+        https://github.com/hwanheelee1993/UMIC/blob/9d897ee575d754dada84e00da426bbceabffc450/make_txt_db.py#L18
+        The only difference is my work has CLS at beginning and SEP at the end of each sequence
+        :param cand_caption:
+        :return:
+        """
 
         tokens = self.tokenizer(
             cand_caption,
