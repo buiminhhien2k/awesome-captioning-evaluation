@@ -2,8 +2,10 @@ import torch
 import json
 import evaluation
 import os
+
+from metrics.clip_image_score import ClipImageScore
 from metrics.clip_score import ClipScoreMetric
-from metrics.polos import PolosMetric
+# from metrics.polos import PolosMetric
 from metrics.standard import StandardMetric
 from metrics.bert_score import BertScoreBasic, BertScoreImproved
 
@@ -16,60 +18,69 @@ def collate_fn(batch):
     return torch.utils.data.default_collate(batch)
 
 
-def prepare_json(file_json):
-    with open('test_captions/reference_captions.json', 'r') as f:
+def prepare_json(file_json, data_dir="test_captions"):
+    with open(f'{data_dir}/reference_captions.json', 'r') as f:
         references = json.load(f)
 
     # check if file exist
-    if os.path.isfile('test_captions/' + file_json):
-        with open('test_captions/' + file_json, 'r') as f:
+    if os.path.isfile(f'{data_dir}/{file_json}'):
+        with open(f'{data_dir}/{file_json}', 'r') as f:
             data = json.load(f)
     else:
         print(
             f"File {file_json} not found in test_captions/.")
 
-    gen = {}
-    gts = {}
+    gen_tokenized = {}
+    gts_tokenized = {}
 
-    ims_cs = list()
-    gen_cs = list()
-    gts_cs = list()
+    image_paths  : list[str] = list()
+    cand_captions: list[str] = list()
+    refs_captions: list[list[str]] = list()
+    human_scores : list[float] = list()
+    filejson_to_image_dir_mapper ={
+        'flickrExpert-wo-human.json': 'flickr8k',
+        'flickrExpert-w-human.json': 'flickr8k',
+        'flickrCrowdflower.json': 'flickr8k',
+    }
+    for i, data in enumerate(data):  # k = name img, v=cand
+        assert isinstance(data, dict)
+        image_id: str = data["image-id"] # required field
+        cand_caption: str = data["cand-caption"] # required field
+        human_score: float|None = data.get("human-score", None) # optional field
+        # human score can be null depending on the purpose of using this benchmark
 
-    for i, d in enumerate(data):  # k = name img, v=cand
-        if isinstance(d, dict):
-            name = list(d.keys())[0]
-            gen_i = d[name]
-            d = list(d.keys())[0]
-        else:
-            gen_i = data[d]
-        im_i = 'your-path/COCO_val2014_' + \
-            d.zfill(12) + '.jpg'
+        image_dir = filejson_to_image_dir_mapper[file_json]
+        img_path = f'data/{image_dir}/{image_id}.jpg'
 
-        gts_i = references[d]
-        gen['%d' % (i)] = [gen_i, ]
-        gts['%d' % (i)] = gts_i
+        refs_captions_i = references[image_id]
+        gen_tokenized['%d' % (i)] = [cand_caption, ]
+        gts_tokenized['%d' % (i)] = refs_captions_i
 
-        ims_cs.append(im_i)
-        gen_cs.append(gen_i)
-        gts_cs.append(gts_i)
+        image_paths.append(img_path)
+        cand_captions.append(cand_caption)
+        refs_captions.append(refs_captions_i)
+        human_scores.append(human_score)
 
-    gts = evaluation.PTBTokenizer.tokenize(gts)
-    gen = evaluation.PTBTokenizer.tokenize(gen)
+    gts_tokenized = evaluation.PTBTokenizer.tokenize(gts_tokenized)
+    gen_tokenized = evaluation.PTBTokenizer.tokenize(gen_tokenized)
 
-    return gts, gen, ims_cs, gen_cs, gts_cs
+
+    return gts_tokenized, gen_tokenized, image_paths, cand_captions, refs_captions, human_scores
 
 
 def get_metric(name, **kwargs):
     name = name.lower()
     if name == "clip-score" or name == "pac-score" or name == "pac-score++":
         return ClipScoreMetric(metric_name=name, **kwargs)
-    elif name == "polos":
-        return PolosMetric(device=kwargs.get("device"))
+    # elif name == "polos":
+    #     return PolosMetric(device=kwargs.get("device"))
     elif name == "standard":
         return StandardMetric()
     elif name == "bert-score":
         return BertScoreBasic("en")
     elif name == "bert-score++":
         return BertScoreImproved("en")
+    elif name == "clip-image-score":
+        return ClipImageScore(kwargs.get("device"))
     else:
         raise ValueError(f"Unknown metric: {name}")
