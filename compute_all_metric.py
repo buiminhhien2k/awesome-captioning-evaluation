@@ -10,6 +10,7 @@ ACCEPTED_METRIC_TYPES = [
     "clip-score", "pac-score", "pac-score++",
     "polos", "standard", "bert-score", "bert-score++",
     "clip-image-score"
+    "umic-score"
 ]
 
 if __name__ == '__main__':

@@ -8,6 +8,8 @@ from metrics.clip_score import ClipScoreMetric
 # from metrics.polos import PolosMetric
 from metrics.standard import StandardMetric
 from metrics.bert_score import BertScoreBasic, BertScoreImproved
+from metrics.umic_score import UmicScore
+
 
 def collate_fn(batch):
     if isinstance(batch, tuple) and isinstance(batch[0], list):
@@ -82,5 +84,7 @@ def get_metric(name, **kwargs):
         return BertScoreImproved("en")
     elif name == "clip-image-score":
         return ClipImageScore(kwargs.get("device"))
+    elif name == "umic-score":
+        return UmicScore()
     else:
         raise ValueError(f"Unknown metric: {name}")
