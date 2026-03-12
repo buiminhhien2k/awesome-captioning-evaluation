@@ -20,12 +20,12 @@ class BertScoreBasic(BaseMetric):
     def load_model(self):
         pass
 
-    def setup(self, use_tfidf=False):
+    def setup(self, use_tfidf=True):
         self.use_tfidf = use_tfidf
         # if not using tfidf, all words/tokens will be treated with same weight
         # if use tfidf, the weight will be retrieved from reference captions
 
-    def compute_score(self, ims_cs, gen_cs, gts_cs=None, gts=None, gen=None):
+    def compute_score(self, gen_cs, gts_cs, **kwargs):
         """
             please refer to this `score` method from the original author
             https://github.com/Tiiiger/bert_score/blob/master/bert_score/score.py
@@ -46,10 +46,14 @@ class BertScoreBasic(BaseMetric):
             cands=gen_cs,
             refs=gts_cs,
             lang=self.lang,
-            idf=self.use_tfidf
+            idf=self.use_tfidf,
+            rescale_with_baseline=True,
         )
 
-        scores[f"{self.__class__.__name__} F1-score"] = f1.mean()
+        scores[f"bert-score F1-score"] = {
+            "overall": f1.mean(),
+            "score_per_cap": f1.tolist()
+        }
         return scores
 
 class BertScoreImproved(BaseMetric):
@@ -101,7 +105,10 @@ class BertScoreImproved(BaseMetric):
             p, r, f1 = self.compute_precision_recall_f1(ensembled_ref_matrix, vectored_cand_matrix)
             bert_scores.append(f1)
 
-        scores[f"{self.__class__.__name__} F1-score"] = np.mean(bert_scores)
+        scores["bert-score++ F1-score"] = {
+            "overall": np.mean(bert_scores),
+            "score_per_cap": bert_scores
+        }
 
         return scores
 
