@@ -25,19 +25,22 @@ class ClipScoreMetric(BaseMetric):
         self.model = None
         self.preprocess = None
 
-    def setup(self):
+    def load_model(self):
         if self.clip_model.startswith("open_clip"):
             print(f"Loading OpenCLIP model: {self.clip_model}")
             model, _, preprocess = open_clip.create_model_and_transforms(
-                'ViT-L-14', pretrained='laion2b_s32b_b82k'
+                'ViT-L-14', pretrained='laion2b_s32b_b82k',
+                cache_dir='./checkpoints/'
             )
         elif self.metric_name == 'pac-score++':
             print(f"Loading PAC-S++ model: {self.clip_model}")
             model, preprocess = clip_lora.load(
-                self.clip_model, device=self.device, lora=4)
+                self.clip_model, device=self.device, lora=4
+                , download_root='./checkpoints/'
+            )
         else:
             print(f"Loading CLIP model: {self.clip_model}")
-            model, preprocess = clip.load(self.clip_model, device=self.device)
+            model, preprocess = clip.load(self.clip_model, device=self.device, download_root='./checkpoints/')
 
         model = model.to(self.device).float()
 
@@ -50,6 +53,9 @@ class ClipScoreMetric(BaseMetric):
         model.eval()
         self.model = model
         self.preprocess = preprocess
+    def setup(self):
+        self.load_model()
+
 
     def compute_score(self, ims_cs, gen_cs, gts_cs=None, gts=None, gen=None):
         if self.model is None:
@@ -60,7 +66,10 @@ class ClipScoreMetric(BaseMetric):
         mean, clip_scores, candidate_feats, _ = PACScore(
             self.model, self.preprocess, ims_cs, gen_cs, self.device, w=self.weight
         )
-        scores[f"{self.metric_name.upper()}"] = mean
+        scores[f"{self.metric_name.upper()}"] = {
+            "overall": mean,
+            "score_per_cap": clip_scores
+        }
 
         if gts_cs:
             _, per_instance_text_text = RefPACScore(
@@ -69,6 +78,9 @@ class ClipScoreMetric(BaseMetric):
             refclip_scores = 2 * clip_scores * per_instance_text_text / (
                 clip_scores + per_instance_text_text
             )
-            scores[f"Ref_{self.metric_name.upper()}"] = np.mean(refclip_scores)
+            scores[f"Ref_{self.metric_name.upper()}"] = {
+                "overall": np.mean(refclip_scores),
+                "score_per_cap": refclip_scores
+            }
 
         return scores

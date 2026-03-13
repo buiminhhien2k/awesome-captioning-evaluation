@@ -124,7 +124,11 @@ class UmicScore(BaseMetric):
         # this step is refer to UMIC repository
         umic_score = [1/(1+math.exp(-rank_score)) for rank_score in rank_scores] # sigmoid
 
-        return {"umic-score": sum(umic_score)/ len(umic_score)}
+        return {"umic-score": {
+            "overall": sum(umic_score) / len(umic_score),
+            "score_per_cap": umic_score
+        }
+        }
 
     def read_image(self, image_path):
         image = Image.open(image_path)

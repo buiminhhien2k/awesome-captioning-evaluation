@@ -8,8 +8,8 @@ from diffusers import (
     StableDiffusionXLPipeline,
     EulerAncestralDiscreteScheduler,
 )
-from models import open_clip
-# from models.clip import clip
+# from models import open_clip
+from models import clip
 
 from PIL import Image
 
@@ -70,10 +70,10 @@ class ClipImageScore(BaseMetric):
         except Exception as e:
             print(f"Error initializing pipeline: {e}")
             raise e  # Raise the exception instead of just calling exit()
-        self.model, _, self.processor = open_clip.create_model_and_transforms(
-            'ViT-L-14', pretrained='laion2b_s32b_b82k', cache_dir='./checkpoints/'
+        self.model, self.processor = clip.load(
+            'ViT-B/32', device=self.device, download_root='./checkpoints/'
         )
-        self.model.to(self.device)
+        # self.model.to(self.device)
 
 
     def compute_score(self, ims_cs, gen_cs, **kwargs):
