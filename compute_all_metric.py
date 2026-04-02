@@ -9,7 +9,8 @@ from utils.utils import prepare_json, get_metric
 ACCEPTED_METRIC_TYPES = [
     "clip-score", "pac-score", "pac-score++",
     "polos", "standard", "bert-score", "bert-score++",
-    "clip-image-score"
+    "clip-image-score",
+    "blip2-score",
     "umic-score"
 ]
 
