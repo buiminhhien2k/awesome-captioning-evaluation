@@ -101,7 +101,7 @@ class BertScoreImproved(BaseMetric):
             ensembled_ref_matrix = self.get_ensemble_reference_word_vectors(
                 refs, idf_dict, all_layers=False, default_threshold=0.83
             )
-            vectored_cand_matrix = self.get_candidate_word_vectors(cand, idf_dict)
+            vectored_cand_matrix = self.get_candidate_word_vectors([cand], idf_dict)
             p, r, f1 = self.compute_precision_recall_f1(ensembled_ref_matrix, vectored_cand_matrix)
             bert_scores.append(f1)
 

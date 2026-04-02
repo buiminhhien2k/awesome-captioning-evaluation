@@ -12,7 +12,6 @@ from detectron2 import model_zoo
 """
 import torch
 import numpy as np
-from torch import device
 
 from .base_metric import BaseMetric
 from transformers import BertTokenizer
