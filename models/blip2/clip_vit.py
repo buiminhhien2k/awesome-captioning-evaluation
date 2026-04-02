@@ -7,7 +7,6 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-# from fairscale.nn.checkpoint.checkpoint_activations import checkpoint_wrapper
 import torch.utils.checkpoint as cp
 
 from models.blip2.eva_vit import convert_weights_to_fp16

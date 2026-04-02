@@ -39,7 +39,7 @@ class Blip2Base(BaseModel):
         enable_autocast = self.device != torch.device("cpu")
 
         if enable_autocast:
-            return torch.cuda.amp.autocast(dtype=dtype)
+            return torch.amp.autocast(device_type=self.device.type, dtype=dtype)
         else:
             return contextlib.nullcontext()
 
@@ -51,6 +51,8 @@ class Blip2Base(BaseModel):
         encoder_config.add_cross_attention = True
         encoder_config.cross_attention_freq = cross_attention_freq
         encoder_config.query_length = num_query_token
+        if not hasattr(BertLMHeadModel, "all_tied_weights_keys"):
+            BertLMHeadModel.all_tied_weights_keys = property(lambda self: {})
         Qformer = BertLMHeadModel.from_pretrained(
             "bert-base-uncased", config=encoder_config
         )

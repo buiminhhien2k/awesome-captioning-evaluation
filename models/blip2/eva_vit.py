@@ -12,7 +12,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
-from timm.models.layers import drop_path, to_2tuple, trunc_normal_
+from timm.layers import drop_path, to_2tuple, trunc_normal_
 # from timm.models.registry import register_model
 
 from models.blip2.common.dist_utils import download_cached_file
@@ -421,11 +421,11 @@ def convert_weights_to_fp16(model: nn.Module):
             if l.bias is not None:
                 l.bias.data = l.bias.data.half()
 
-            if isinstance(l, (nn.MultiheadAttention, Attention)):
-                for attr in [*[f"{s}_proj_weight" for s in ["in", "q", "k", "v"]], "in_proj_bias", "bias_k", "bias_v"]:
-                    tensor = getattr(l, attr)
-                    if tensor is not None:
-                        tensor.data = tensor.data.half()
+            # if isinstance(l, (nn.MultiheadAttention, Attention)):
+            #     for attr in [*[f"{s}_proj_weight" for s in ["in", "q", "k", "v"]], "in_proj_bias", "bias_k", "bias_v"]:
+            #         tensor = getattr(l, attr)
+            #         if tensor is not None:
+            #             tensor.data = tensor.data.half()
 
     model.apply(_convert_weights_to_fp16)
 

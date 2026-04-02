@@ -9,9 +9,9 @@
 """
 
 import math
-import os
-import warnings
-from dataclasses import dataclass
+# import os
+# import warnings
+# from dataclasses import dataclass
 from typing import Optional, Tuple, Dict, Any
 
 import torch
@@ -37,7 +37,7 @@ from transformers.modeling_utils import (
 )
 from transformers.pytorch_utils import (
     apply_chunking_to_forward,
-    find_pruneable_heads_and_indices,
+    # find_pruneable_heads_and_indices,
     prune_linear_layer,
 )
 import transformers
@@ -297,10 +297,37 @@ class BertAttention(nn.Module):
         self.output = BertSelfOutput(config)
         self.pruned_heads = set()
 
+    @staticmethod
+    def __find_pruneable_heads_and_indices(
+            heads: list[int], n_heads: int, head_size: int, already_pruned_heads: set[int]
+    ) -> tuple[set[int], torch.LongTensor]:
+        """
+        Finds the heads and their indices taking `already_pruned_heads` into account.
+
+        Args:
+            heads (`List[int]`): List of the indices of heads to prune.
+            n_heads (`int`): The number of heads in the model.
+            head_size (`int`): The size of each head.
+            already_pruned_heads (`Set[int]`): A set of already pruned heads.
+
+        Returns:
+            `Tuple[Set[int], torch.LongTensor]`: A tuple with the indices of heads to prune taking `already_pruned_heads`
+            into account and the indices of rows/columns to keep in the layer weight.
+        """
+        mask = torch.ones(n_heads, head_size)
+        heads = set(heads) - already_pruned_heads  # Convert to set and remove already pruned heads
+        for head in heads:
+            # Compute how many pruned heads are before the head and move the index accordingly
+            head = head - sum(1 if h < head else 0 for h in already_pruned_heads)
+            mask[head] = 0
+        mask = mask.view(-1).contiguous().eq(1)
+        index: torch.LongTensor = torch.arange(len(mask))[mask].long()
+        return heads, index
+
     def prune_heads(self, heads):
         if len(heads) == 0:
             return
-        heads, index = find_pruneable_heads_and_indices(
+        heads, index = self.__find_pruneable_heads_and_indices(
             heads,
             self.self.num_attention_heads,
             self.self.attention_head_size,
@@ -673,6 +700,34 @@ class BertPreTrainedModel(PreTrainedModel):
             module.weight.data.fill_(1.0)
         if isinstance(module, nn.Linear) and module.bias is not None:
             module.bias.data.zero_()
+
+    def get_head_mask(
+        self, head_mask: Optional[Tensor], num_hidden_layers: int, is_attention_chunked: bool = False
+    ) -> Tensor:
+        """
+        This function is stolen from transformers==4.50.2
+        Prepare the head mask if needed.
+        Args:
+            head_mask (`torch.Tensor` with shape `[num_heads]` or `[num_hidden_layers x num_heads]`, *optional*):
+                The mask indicating if we should keep the heads or not (1.0 for keep, 0.0 for discard).
+            num_hidden_layers (`int`):
+                The number of hidden layers in the model.
+            is_attention_chunked (`bool`, *optional*, defaults to `False`):
+                Whether or not the attentions scores are computed by chunks or not.
+
+        Returns:
+            `torch.Tensor` with shape `[num_hidden_layers x batch x num_heads x seq_length x seq_length]` or list with
+            `[None]` for each layer.
+        """
+        if head_mask is not None:
+            head_mask = self._convert_head_mask_to_5d(head_mask, num_hidden_layers)
+            if is_attention_chunked is True:
+                head_mask = head_mask.unsqueeze(-1)
+        else:
+            head_mask = [None] * num_hidden_layers
+
+        return head_mask
+
 
 
 class BertModel(BertPreTrainedModel):

@@ -521,6 +521,17 @@ class Blip2Qformer(Blip2Base):
             cross_attention_freq=cross_attention_freq,
             max_txt_len=max_txt_len,
         )
+        vocab_size = len(model.tokenizer)
+        old_bias = model.Qformer.cls.predictions.bias
+
+        if old_bias.shape[0] != vocab_size:
+            new_bias = torch.zeros(vocab_size, device=old_bias.device, dtype=old_bias.dtype)
+            new_bias[:old_bias.shape[0]] = old_bias.data
+            model.Qformer.cls.predictions.bias = torch.nn.Parameter(new_bias)
+
+            if hasattr(model.Qformer.cls.predictions.decoder, "bias"):
+                model.Qformer.cls.predictions.decoder.bias = model.Qformer.cls.predictions.bias
+
         model.load_checkpoint_from_config(cfg)
 
         return model

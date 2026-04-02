@@ -11,7 +11,7 @@ import os
 
 import torch
 import torch.distributed as dist
-import timm.models.hub as timm_hub
+import timm.models._hub as timm_hub
 
 
 def setup_for_distributed(is_master):
@@ -135,5 +135,3 @@ def download_cached_file(url, check_hash=True, progress=False):
         dist.barrier()
 
     return get_cached_file_path()
-
-

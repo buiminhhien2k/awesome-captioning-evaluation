@@ -62,12 +62,12 @@ class Blip2ITM(Blip2Qformer):
         image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(
             image.device
         )
-
         text = self.tokenizer(
             caption,
             truncation=True,
             max_length=self.max_txt_len,
             return_tensors="pt",
+            padding=True
         ).to(image.device)
 
         if match_head == "itm":
