@@ -9,6 +9,7 @@ from metrics.clip_score import ClipScoreMetric
 from metrics.standard import StandardMetric
 from metrics.bert_score import BertScoreBasic, BertScoreImproved
 from metrics.umic_score import UmicScore
+from metrics.blip2_score import Blip2ScoreMetric
 
 
 def collate_fn(batch):
@@ -86,5 +87,7 @@ def get_metric(name, **kwargs):
         return ClipImageScore(kwargs.get("device"))
     elif name == "umic-score":
         return UmicScore()
+    elif name == "blip2-score":
+        return Blip2ScoreMetric()
     else:
         raise ValueError(f"Unknown metric: {name}")
