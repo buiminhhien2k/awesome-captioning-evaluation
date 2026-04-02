@@ -11,7 +11,6 @@ class StandardMetric(BaseMetric):
         all_scores_metrics = get_all_metrics(gts_cs, gen_cs)
 
         for k, v in all_scores_metrics.items():
-            # print(k, v)
             if k == 'BLEU':
                 all_scores['BLEU-1'] = {"overall": v["overall"][0], "score_per_cap": v["score_per_cap"][0]}
                 all_scores['BLEU-4'] = {"overall": v["overall"][-1], "score_per_cap": v["score_per_cap"][-1]}
