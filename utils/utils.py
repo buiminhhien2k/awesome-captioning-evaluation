@@ -5,7 +5,7 @@ import os
 
 from metrics.clip_image_score import ClipImageScore
 from metrics.clip_score import ClipScoreMetric
-# from metrics.polos import PolosMetric
+from metrics.polos import PolosMetric
 from metrics.standard import StandardMetric
 from metrics.bert_score import BertScoreBasic, BertScoreImproved
 from metrics.umic_score import UmicScore
@@ -21,7 +21,7 @@ def collate_fn(batch):
     return torch.utils.data.default_collate(batch)
 
 
-def prepare_json(file_json, data_dir="test_captions"):
+def prepare_json(file_json, data_dir, image_dir):
     with open(f'{data_dir}/reference_captions.json', 'r') as f:
         references = json.load(f)
 
@@ -40,11 +40,7 @@ def prepare_json(file_json, data_dir="test_captions"):
     cand_captions: list[str] = list()
     refs_captions: list[list[str]] = list()
     human_scores : list[float] = list()
-    filejson_to_image_dir_mapper ={
-        'flickrExpert-wo-human.json': 'flickr8k',
-        'flickrExpert-w-human.json': 'flickr8k',
-        'flickrCrowdflower.json': 'flickr8k',
-    }
+
     for i, data in enumerate(data):  # k = name img, v=cand
         assert isinstance(data, dict)
         image_id: str = data["image-id"] # required field
@@ -52,8 +48,7 @@ def prepare_json(file_json, data_dir="test_captions"):
         human_score: float|None = data.get("human-score", None) # optional field
         # human score can be null depending on the purpose of using this benchmark
 
-        image_dir = filejson_to_image_dir_mapper[file_json]
-        img_path = f'data/{image_dir}/{image_id}.jpg'
+        img_path = f'{image_dir}/{image_id}'
 
         refs_captions_i = references[image_id]
         gen_tokenized['%d' % (i)] = [cand_caption, ]
@@ -75,8 +70,8 @@ def get_metric(name, **kwargs):
     name = name.lower()
     if name == "clip-score" or name == "pac-score" or name == "pac-score++":
         return ClipScoreMetric(metric_name=name, **kwargs)
-    # elif name == "polos":
-    #     return PolosMetric(device=kwargs.get("device"))
+    elif name == "polos":
+        return PolosMetric(device=kwargs.get("device"))
     elif name == "standard":
         return StandardMetric()
     elif name == "bert-score":

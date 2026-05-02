@@ -22,17 +22,17 @@ if __name__ == '__main__':
     parser.add_argument('--compute_metric_type', type=str, nargs='+',
                         default=['clip-score', 'pac-score', 'pac-score++'])
 
-    parser.add_argument('--captions_dir', type=str, nargs='+',
-                        default='flickr')
+    parser.add_argument('--dataset', type=str,
+                        default='flickrExpert',
+                        choices=['flickrExpert', 'flickrCrowdflower', 'polaris', 'composite']
+                        )
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    filejson_to_image_dir_mapper ={
-        'flickrExpert-wo-human.json': 'flickr8k',
-        'flickrCrowdflower.json': 'flickr8k',
-    }
+
     files = []
-    json_dir = f'test_captions/{args.captions_dir}'
+    json_dir = f'test_captions/{args.dataset}'
+    image_dir = f'data/{args.dataset}'
     for file_json in os.listdir(json_dir):
         if not file_json.endswith('.json') or file_json == 'reference_captions.json':
             continue
@@ -49,7 +49,7 @@ if __name__ == '__main__':
         metrics_list.append(metric_obj)
     for file_json in files:
         print(f"***************Processing file: {file_json}")
-        gts, gen, ims_cs, gen_cs, gts_cs, human_scores = prepare_json(file_json, json_dir)
+        gts, gen, ims_cs, gen_cs, gts_cs, human_scores = prepare_json(file_json, json_dir, image_dir)
         has_human_score = all([hs != None for hs in human_scores])
         for metric in metrics_list:
             scores = metric.compute_score(
