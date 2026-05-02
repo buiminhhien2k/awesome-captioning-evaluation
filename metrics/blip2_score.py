@@ -22,10 +22,10 @@ class Blip2ScoreMetric(BaseMetric):
         self.load_model()
 
     def load_model(self, **kwargs):
-        self.model = self.model_cls.from_pretrained(model_type="pretrain").to(self.device)
+        self.model = self.model_cls.from_pretrained(model_type="pretrain_vitL").to(self.device)
         self.model.eval()
 
-        cfg = OmegaConf.load(self.model_cls.default_config_path("pretrain"))
+        cfg = OmegaConf.load(self.model_cls.default_config_path("pretrain_vitL"))
         self.vis_processor, self.txt_processor = self.load_process(cfg.preprocess)
 
     def _build_proc_from_cfg(self, cfg: Union[DictConfig, ListConfig]):
