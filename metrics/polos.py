@@ -1,6 +1,6 @@
 import numpy as np
 from .base_metric import BaseMetric
-from polos.models import download_model, load_checkpoint
+from models.polos.models import download_model, load_checkpoint
 from PIL import Image
 
 
@@ -8,8 +8,11 @@ class PolosMetric(BaseMetric):
     def __init__(self, device="cuda"):
         self.device = device
         self.model = None
+        self.metric_name = "polos"
 
     def setup(self):
+        self.load_model()
+    def load_model(self, **kwargs):
         model_path = download_model("polos")
         self.model = load_checkpoint(model_path)
 
@@ -33,4 +36,8 @@ class PolosMetric(BaseMetric):
 
         _, scores = self.model.predict(
             self.polos_dict, batch_size=10, cuda=(self.device == "cuda"))
-        return {f"{self.metric_name.upper()}": np.mean(scores)}
+        # print(_, scores)
+        return {f"{self.metric_name}": {
+            "overall":np.mean(scores),
+            "score_per_cap": scores}
+        }
