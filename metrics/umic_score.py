@@ -2,6 +2,9 @@ from detectron2.engine import DefaultPredictor
 from detectron2.config import get_cfg
 from detectron2.data import transforms as T
 from detectron2 import model_zoo
+
+from detectron2.structures import Boxes
+
 """
     HOW TO INSTALL Detectron2? if you cannot install with the standard method like this
     [instruction](https://detectron2.readthedocs.io/en/latest/tutorials/install.html)
@@ -13,9 +16,12 @@ from detectron2 import model_zoo
 import torch
 import numpy as np
 
+import tqdm
+
 from .base_metric import BaseMetric
 from transformers import BertTokenizer
 
+from models.uniter.ce import UniterForCaptioningMetric
 from models.uniter.model import UniterModel
 from utils.config import load_model_paths
 
@@ -33,7 +39,7 @@ class UmicScore(BaseMetric):
     in any images (please view the UNITER model on how to use detectron2)
     """
 
-    def __init__(self, rcnn_file="faster_rcnn_R_101_FPN_3x.yaml"):
+    def __init__(self, rcnn_file="faster_rcnn_R_101_C4_3x.yaml"):
         """
         :param rcnn_file: name of yaml file to configure detectron2
         """
@@ -55,15 +61,20 @@ class UmicScore(BaseMetric):
         # the author of UMIC metric repository
         # https://github.com/hwanheelee1993/UMIC?tab=readme-ov-file#-2-download-the-pretrained-model-
         umic_state = torch.load(load_model_paths()["umic"])
-        self.umicModel = UniterModel.from_pretrained(
+        self.umicModel = UniterForCaptioningMetric.from_pretrained(
             config_file="config/uniter-config/uniter-base.json",
             state_dict=umic_state,
             img_dim=self.IMAGE_DIM
         )
+        self.umicModel.init_output()
         self.umicModel.to(self.device).eval()
 
-        self.rank_output = torch.nn.Linear(self.umicModel.config.hidden_size, 1).cuda()
-        self.pooler = self.umicModel.pooler
+        # self.rank_output = torch.nn.Linear(self.umicModel.config.hidden_size, 1).to(self.device)
+        # self.rank_output.weight.data = umic_state['itm_output.weight'].data[1:,:].to(self.device, dtype=torch.float32)
+        # self.rank_output.bias.data = umic_state['itm_output.bias'].data[1:].to(self.device, dtype=torch.float32)
+        # self.rank_output.eval()
+
+        # self.pooler = self.umicModel.pooler.eval()
 
 
     def compute_score(
@@ -87,7 +98,7 @@ class UmicScore(BaseMetric):
 
         rank_scores = list()
 
-        for img_path, cand_cap in zip(ims_cs, gen_cs):
+        for img_path, cand_cap in tqdm.tqdm(zip(ims_cs, gen_cs), total=len(ims_cs)):
             # TODO: This version is currently calculate UMIC score for 1-by-1 image, next task is to
             #  use dataloader to process data in batch.
             image = self.read_image(img_path)
@@ -105,21 +116,37 @@ class UmicScore(BaseMetric):
                 .arange(cand_input_ids.shape[1] + img_feat.shape[1], dtype=torch.long, device=self.device)\
                 .unsqueeze(0)
 
-            outputs = self.umicModel(
-                input_ids=cand_input_ids,
-                attention_mask=joint_mask,
-                position_ids=position_ids,
-                img_feat=img_feat,
-                img_pos_feat=img_box,
-                gather_index=gather_ids,
-                output_all_encoded_layers=False
+            batch = {
+                "input_ids": cand_input_ids,
+                "position_ids": position_ids,
+                "img_feat": img_feat,
+                "img_pos_feat": img_box,
+                "attn_masks": joint_mask,
+                "gather_index": gather_ids,
+            }
+            # outputs = self.umicModel(
+            #     input_ids=cand_input_ids,
+            #     attention_mask=joint_mask,
+            #     position_ids=position_ids,
+            #     img_feat=img_feat,
+            #     img_pos_feat=img_box,
+            #     gather_index=gather_ids,
+            #     output_all_encoded_layers=False
+            # )
+            # pooled_output = self.pooler(outputs)
+            # scores = self.rank_output(pooled_output)
+            scores = self.umicModel(
+                batch=batch,
+                compute_loss=False
             )
 
 
-            pooled_output = self.pooler(outputs)
-            scores = self.rank_output(pooled_output)
-            rank_scores += [scores.squeeze().detach().cpu().numpy()]
+            # scores = self.umicModel(
+            #     batch=batch,
+            #     compute_loss=False
+            # )
 
+            rank_scores += [scores.squeeze().detach().cpu().numpy()]
         # this step is refer to UMIC repository
         umic_score = [1/(1+math.exp(-rank_score)) for rank_score in rank_scores] # sigmoid
 
@@ -136,123 +163,164 @@ class UmicScore(BaseMetric):
 class ImageFeatureEmbedder:
     """
     Generate image region features + object boxes in UNITER format.
-    Outputs:
+
+    For Faster R-CNN R101-C4:
         img_feat: (1, N, 2048)
         img_pos:  (1, N, 7)
-    """
-    def __init__(self, device="cuda", file="faster_rcnn_R_101_FPN_3x.yaml"):
-        """
-        :param device: suggest to have cuda environment to load detectron model
-        :param file: name of the detectron config file, if you use other configurations, make sure to place it in
-            config/COCO-Detection folder and its base config in config/ folder. For example, I put
-            `faster_rcnn_R_101_FPN_3x.yaml` in config/COCO-Detection/ and `Base-RCNN-FPN.yaml` in config/
-            You can download other config from https://github.com/facebookresearch/detectron2/tree/main/configs.
-            However, please adjust `UmicScore.IMAGE_DIM` and potentially make change to ImageFeatureEmbedder.embed_image
-            corresponding to the dimension output of your configuration selection. The UMIC author seems to use
-            `faster_rcnn_R_101_C4_3x.yaml` producing 2048 IMAGE_DIM but in this repository I chose
-            `faster_rcnn_R_101_FPN_3x.yaml` producing 1024 IMAGE DIM
-        """
-        self.device = device
 
-        # Load Faster R-CNN R101 FPN config
+    N is top_k, usually 36.
+    """
+
+    def __init__(
+            self,
+            device="cuda",
+            file="faster_rcnn_R_101_C4_3x.yaml",
+            top_k=36,
+            score_thresh=0.2,
+    ):
+        self.device = device
+        self.top_k = top_k
+
         self.cfg = get_cfg()
         self.cfg.merge_from_file(f"config/COCO-Detection/{file}")
         self.cfg.MODEL.WEIGHTS = model_zoo.get_checkpoint_url(
             f"COCO-Detection/{file}"
         )
-        self.cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.2
+        self.cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = score_thresh
         self.cfg.MODEL.DEVICE = device
 
-        # Preprocessing augmentation
         self.aug = T.ResizeShortestEdge(
             [self.cfg.INPUT.MIN_SIZE_TEST, self.cfg.INPUT.MIN_SIZE_TEST],
-            self.cfg.INPUT.MAX_SIZE_TEST
+            self.cfg.INPUT.MAX_SIZE_TEST,
         )
 
-        # Build predictor and raw model
         self.predictor = DefaultPredictor(self.cfg)
         self.model = self.predictor.model.eval()
 
     def _boxes_to_uniter_7d(self, boxes, img_h, img_w):
         """
-        Convert (N,4) → (N,7): [x1, y1, x2, y2, W, H, area]
-        reference from UNITER model paper https://arxiv.org/pdf/1909.11740
+        Convert boxes to normalised UNITER-style 7D position features.
+
+        boxes: numpy array [N, 4], format [x1, y1, x2, y2]
+        return: numpy array [N, 7]
         """
-        x1, y1, x2, y2 = (
-            boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+        x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+
+        box_w = np.maximum(x2 - x1, 0)
+        box_h = np.maximum(y2 - y1, 0)
+        area = box_w * box_h
+
+        pos = np.stack(
+            [
+                x1 / img_w,
+                y1 / img_h,
+                x2 / img_w,
+                y2 / img_h,
+                box_w / img_w,
+                box_h / img_h,
+                area / (img_w * img_h),
+                ],
+            axis=1,
         )
-        area = (x2 - x1) * (y2 - y1)
 
-        pos = np.stack([
-            x1, y1, x2, y2,
-            np.full_like(area, img_w),
-            np.full_like(area, img_h),
-            area
-        ], axis=1)
-
-        return pos  # (N, 7)
+        return pos.astype("float32")
 
     def embed_image(self, img):
         """
-        :param pil_image: PIL.Image instance, RGB
-        :return: a tuple of 2: (1, N, 2048) features, (1, N, 7) positional features. Normally, N is 1000
+        :param img: numpy image, RGB, shape [H, W, 3]
+        :return:
+            img_feat: torch.FloatTensor [1, N, 2048]
+            img_pos:  torch.FloatTensor [1, N, 7]
         """
-
         img_h, img_w = img.shape[:2]
 
-        # detectron2 expects BGR channel order
+        # Detectron2 expects BGR
         img_bgr = img[:, :, ::-1]
 
-        # apply resizing augmentation
         transform = self.aug.get_transform(img_bgr)
         img_trans = transform.apply_image(img_bgr)
 
-        # convert to CHW tensor
         img_tensor = torch.as_tensor(
-            img_trans.astype("float32").transpose(2, 0, 1)
+            img_trans.astype("float32").transpose(2, 0, 1),
+            device=self.device,
         )
 
-        inputs = [{
-            "image": img_tensor.to(self.device),
-            "height": img_h,
-            "width": img_w
-        }]
+        inputs = [
+            {
+                "image": img_tensor,
+                "height": img_h,
+                "width": img_w,
+            }
+        ]
 
-        # Extract FPN region features
         with torch.no_grad():
             images = self.model.preprocess_image(inputs)
             features = self.model.backbone(images.tensor)
 
-            # Proposals
-            proposals, _ = self.model.proposal_generator(images, features, None)
-
-            # RoIAlign pooled features
-            box_features = self.model.roi_heads.box_pooler(
-                [features[f] for f in self.model.roi_heads.in_features],
-                [p.proposal_boxes for p in proposals]
+            proposals, _ = self.model.proposal_generator(
+                images, features, None
             )
 
-            # Final FC box head (gives 2048-D vectors)
-            box_features = self.model.roi_heads.box_head(box_features)
-            region_features = box_features.cpu().numpy()  # (N, 2048)
+            # Run ROI heads to obtain final detected instances.
+            results, _ = self.model.roi_heads(
+                images, features, proposals, None
+            )
 
-        # --- Step 5: bounding boxes ---
-        boxes = proposals[0].proposal_boxes.tensor.cpu().numpy()  # (N, 4)
+            instances = results[0]
 
-        # --- Step 6: convert boxes → 7D ---
-        pos_7d = self._boxes_to_uniter_7d(boxes, img_h, img_w)  # (N, 7)
+            if len(instances) == 0:
+                raise RuntimeError("No detected boxes found for this image.")
 
-        # --- Step 7: add batch dimension ---
-        img_feat = region_features[None, :, :]   # (1, N, 1024)
-        img_pos  = pos_7d[None, :, :]            # (1, N, 7)
+            boxes = instances.pred_boxes.tensor
+            scores = instances.scores
 
-        # assert img_feat.shape[2] == 1024, "dimension of image feature is not 1024"
-        assert img_pos.shape[2] == 7, "dimension of image box is not 7"
-        assert img_feat.shape[1] == img_pos.shape[1], "N is not equal for img_feat and img_pos"
+            # Keep top-K final detections.
+            k = min(self.top_k, boxes.shape[0])
+            topk = torch.argsort(scores, descending=True)[:k]
+            boxes = boxes[topk]
 
-        return (torch.from_numpy(img_feat).to(self.device),
-                torch.from_numpy(img_pos).to(self.device))
+            # C4 / Res5ROIHeads path.
+            if not (
+                    hasattr(self.model.roi_heads, "pooler")
+                    and hasattr(self.model.roi_heads, "res5")
+            ):
+                raise RuntimeError(
+                    f"This implementation expects C4 Res5ROIHeads, "
+                    f"but got {type(self.model.roi_heads)}"
+                )
 
+            final_boxes = [Boxes(boxes)]
+
+            box_features = self.model.roi_heads.pooler(
+                [features[f] for f in self.model.roi_heads.in_features],
+                final_boxes,
+            )
+
+            # [N, 2048, H, W]
+            box_features = self.model.roi_heads.res5(box_features)
+
+            # [N, 2048]
+            box_features = box_features.mean(dim=[2, 3])
+
+            region_features = box_features.detach().cpu().numpy().astype("float32")
+            final_boxes_np = boxes.detach().cpu().numpy().astype("float32")
+
+        pos_7d = self._boxes_to_uniter_7d(final_boxes_np, img_h, img_w)
+
+        img_feat = region_features[None, :, :]
+        img_pos = pos_7d[None, :, :]
+
+        assert img_feat.shape[2] == 2048, f"Expected 2048 image dim, got {img_feat.shape[2]}"
+        assert img_pos.shape[2] == 7, f"Expected 7 box dim, got {img_pos.shape[2]}"
+        assert img_feat.shape[1] == img_pos.shape[1], (
+            f"N mismatch: img_feat has {img_feat.shape[1]}, "
+            f"img_pos has {img_pos.shape[1]}"
+        )
+
+        return (
+            torch.from_numpy(img_feat).to(self.device),
+            torch.from_numpy(img_pos).to(self.device),
+        )
 class CandidateCaptionEmbedder:
     def __init__(self, device="cuda"):
         """
@@ -261,7 +329,7 @@ class CandidateCaptionEmbedder:
         :param device:
         """
         self.device = device
-        self.tokenizer = BertTokenizer.from_pretrained("google-bert/bert-base-uncased")
+        self.tokenizer = BertTokenizer.from_pretrained("bert-base-cased")
 
     def tokenize(self, cand_caption):
         """
