@@ -18,8 +18,8 @@ def get_all_metrics(refs, cands, return_per_cap=False):
     names = []
 
     pycoco_eval_cap_scorers = [(Bleu(4), 'BLEU'),
-                               (Meteor(), 'METEOR'),
                                (Rouge(), 'ROUGE'),
+                               (Meteor(), 'METEOR'),
                                (Cider(), 'CIDER'),
                                (SpiceCustomed(), 'SPICE')
                                ]
@@ -58,5 +58,4 @@ class SpiceCustomed(Spice):
         original_result = super().compute_score(gts, res)
         overall = original_result[0]
         score_per_cap = [per_cap['All']['f'] for per_cap in original_result[1]]
-        print(score_per_cap)
         return overall, score_per_cap
