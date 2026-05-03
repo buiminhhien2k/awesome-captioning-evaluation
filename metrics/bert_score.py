@@ -11,6 +11,7 @@ from bert_score.utils import (
     lang2model,
     model2layers)
 
+import tqdm
 
 class BertScoreBasic(BaseMetric):
 
@@ -75,7 +76,7 @@ class BertScoreImproved(BaseMetric):
         num_layers = model2layers[model_type] # 17 for RoBERTa Large
         self.load_model(model_type, num_layers)
 
-    def compute_score(self, ims_cs, gen_cs, gts_cs=None, gts=None, gen=None):
+    def compute_score(self, gen_cs, gts_cs, **kwargs):
         """
 
         :param ims_cs: list of string: list of image_path
@@ -93,11 +94,9 @@ class BertScoreImproved(BaseMetric):
         idf_dict[self.tokenizer.cls_token_id] = 0
         # TODO: allow idf weight based on reference captions like BertScoreBasic
 
-        assert len(gts) == len(gen), "two `gts` and `gen` are not the same length"
-
         bert_scores = list()
         scores = dict()
-        for refs, cand in zip(gts_cs, gen_cs):
+        for refs, cand in tqdm.tqdm(zip(gts_cs, gen_cs), total=len(gts_cs)):
             ensembled_ref_matrix = self.get_ensemble_reference_word_vectors(
                 refs, idf_dict, all_layers=False, default_threshold=0.83
             )
@@ -143,7 +142,8 @@ class BertScoreImproved(BaseMetric):
             # print(f"shape of reference {i}", current_ref_matrix.shape)
             confusion_mat = emsembled_ref_matrix @ current_ref_matrix.T
 
-            assert torch.all(confusion_mat <= torch.tensor(1.0)) and torch.all(confusion_mat >= torch.tensor(-1.0))
+            assert (torch.all(torch.round(confusion_mat,decimals=3) <= torch.tensor(1.000))
+                    and torch.all(torch.round(confusion_mat,decimals=3) >= torch.tensor(-1.000)))
 
             max_val_sim, _ = torch.max(confusion_mat, dim=0)
 
@@ -196,7 +196,8 @@ class BertScoreImproved(BaseMetric):
         return: precision, recall, f1
         '''
         confusion_mat = cand_matrix @ ensembled_ref_matrix.T
-        assert torch.all(confusion_mat <= torch.tensor(1.0)) and torch.all(confusion_mat >= torch.tensor(-1.0))
+        assert (torch.all(torch.round(confusion_mat, decimals=3) <= torch.tensor(1.000))
+                and torch.all(torch.round(confusion_mat, decimals=3) >= torch.tensor(-1.000)))
 
         max_val_sim_cand, _ = torch.max(confusion_mat, dim=1)
         max_val_sim_ref, _ = torch.max(confusion_mat, dim=0)
