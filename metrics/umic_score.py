@@ -1,9 +1,13 @@
-from detectron2.engine import DefaultPredictor
+from detectron2.modeling import build_model
+from detectron2.checkpoint import DetectionCheckpointer
+import detectron2.data.transforms as T
 from detectron2.config import get_cfg
-from detectron2.data import transforms as T
-from detectron2 import model_zoo
+from detectron2.modeling.postprocessing import detector_postprocess
+from detectron2.modeling.roi_heads.fast_rcnn import fast_rcnn_inference_single_image
 
-from detectron2.structures import Boxes
+import torch.nn as nn
+
+import torchvision.transforms.functional as F
 
 """
     HOW TO INSTALL Detectron2? if you cannot install with the standard method like this
@@ -53,7 +57,9 @@ class UmicScore(BaseMetric):
         self.load_model()
 
     def load_model(self):
-        self.imageEmbedder = ImageFeatureEmbedder(self.device, self.rcnn_file)
+        self.imageEmbedder = ImageFeatureEmbedder(
+            "config/COCO-Detection/" + "faster_rcnn_R_101_C4_caffe.yaml" ,
+            'checkpoints/faster_rcnn_from_caffe_attr_original.pkl', device=self.device)
         self.candidateTextEmbedder = CandidateCaptionEmbedder(self.device)
 
         # You need to have `umic.pt` file in checkpoints folder
@@ -69,28 +75,17 @@ class UmicScore(BaseMetric):
         self.umicModel.init_output()
         self.umicModel.to(self.device).eval()
 
-        # self.rank_output = torch.nn.Linear(self.umicModel.config.hidden_size, 1).to(self.device)
-        # self.rank_output.weight.data = umic_state['itm_output.weight'].data[1:,:].to(self.device, dtype=torch.float32)
-        # self.rank_output.bias.data = umic_state['itm_output.bias'].data[1:].to(self.device, dtype=torch.float32)
-        # self.rank_output.eval()
-
-        # self.pooler = self.umicModel.pooler.eval()
-
 
     def compute_score(
             self,
             ims_cs,
             gen_cs,
-            gts_cs,
-            gts,
-            gen
+            **kwargs
         ):
         """
         :param ims_cs: Required List<String>, list of path to the image
         :param gen_cs: Required List<String>, list candidate caption
-        :param gts_cs: Nullable
-        :param gts: Nullable
-        :param gen: Nullable
+
         :return: Float, the UMIC score
         """
 
@@ -124,27 +119,11 @@ class UmicScore(BaseMetric):
                 "attn_masks": joint_mask,
                 "gather_index": gather_ids,
             }
-            # outputs = self.umicModel(
-            #     input_ids=cand_input_ids,
-            #     attention_mask=joint_mask,
-            #     position_ids=position_ids,
-            #     img_feat=img_feat,
-            #     img_pos_feat=img_box,
-            #     gather_index=gather_ids,
-            #     output_all_encoded_layers=False
-            # )
-            # pooled_output = self.pooler(outputs)
-            # scores = self.rank_output(pooled_output)
+
             scores = self.umicModel(
                 batch=batch,
                 compute_loss=False
             )
-
-
-            # scores = self.umicModel(
-            #     batch=batch,
-            #     compute_loss=False
-            # )
 
             rank_scores += [scores.squeeze().detach().cpu().numpy()]
         # this step is refer to UMIC repository
@@ -155,172 +134,167 @@ class UmicScore(BaseMetric):
             "score_per_cap": umic_score
         }
         }
+    @classmethod
+    def read_image(self, image_path: str) -> torch.Tensor:
+        """
+        Reads an image from disk and converts it to a normalized PyTorch tensor.
 
-    def read_image(self, image_path):
-        image = Image.open(image_path)
-        return np.array(image)
+        Returns:
+            Tensor of shape (3, H, W) with values in range [0.0, 1.0]
+        """
+        # 1. Open the image and force it to 3-channel RGB
+        image = Image.open(image_path).convert('RGB')
+
+        # 2. to_tensor() automatically converts the PIL Image to a FloatTensor,
+        # permutes dimensions to (C, H, W), and scales pixels down from [0, 255] to [0.0, 1.0].
+        image_tensor = F.to_tensor(image)
+
+        return image_tensor
 
 class ImageFeatureEmbedder:
     """
-    Generate image region features + object boxes in UNITER format.
-
-    For Faster R-CNN R101-C4:
-        img_feat: (1, N, 2048)
-        img_pos:  (1, N, 7)
-
-    N is top_k, usually 36.
+    Decoupled Detectron2 extraction pipeline using BUTD Caffe-ported weights.
+    Implements the official Box Refinement and dynamic NMS logic for exact parity.
     """
-
-    def __init__(
-            self,
-            device="cuda",
-            file="faster_rcnn_R_101_C4_3x.yaml",
-            top_k=36,
-            score_thresh=0.2,
-    ):
+    def __init__(self, cfg_path: str, weights_path: str, max_proposals: int = 36, device: str = 'cuda'):
         self.device = device
-        self.top_k = top_k
+        self.max_proposals = max_proposals
 
+        # 1. Setup Configuration
         self.cfg = get_cfg()
-        self.cfg.merge_from_file(f"config/COCO-Detection/{file}")
-        self.cfg.MODEL.WEIGHTS = model_zoo.get_checkpoint_url(
-            f"COCO-Detection/{file}"
-        )
-        self.cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = score_thresh
-        self.cfg.MODEL.DEVICE = device
+        self.cfg.set_new_allowed(True)
+        self.cfg.merge_from_file(cfg_path)
+        self.cfg.set_new_allowed(False)
+        self.cfg.MODEL.WEIGHTS = weights_path
+        self.cfg.MODEL.DEVICE = str(self.device)
 
+        # 2. Build Model Natively
+        self.model = build_model(self.cfg)
+
+        # Patch RPN Head to match BUTD 512-channel architecture ---
+        num_anchors = self.model.proposal_generator.rpn_head.anchor_deltas.out_channels // 4
+
+        self.model.proposal_generator.rpn_head.conv = nn.Conv2d(
+            1024, 512, kernel_size=3, stride=1, padding=1
+        )
+        self.model.proposal_generator.rpn_head.objectness_logits = nn.Conv2d(
+            512, num_anchors, kernel_size=1, stride=1
+        )
+        self.model.proposal_generator.rpn_head.anchor_deltas = nn.Conv2d(
+            512, num_anchors * 4, kernel_size=1, stride=1
+        )
+
+        self.model.proposal_generator.rpn_head.to(self.device)
+        # --------------------------------------------------------------------------
+
+        # 3. Load the weights AFTER patching
+        checkpointer = DetectionCheckpointer(self.model)
+
+        checkpoint_dict = checkpointer._load_file(self.cfg.MODEL.WEIGHTS)
+
+        state_dict = checkpoint_dict["model"]
+        for key in list(state_dict.keys()):
+            if "attr" in key or "cls_embedding" in key:
+                del state_dict[key]
+
+        checkpointer._load_model(checkpoint_dict)
+        self.model.eval()
+
+        # 4. Explicitly define the transform for robust resizing
         self.aug = T.ResizeShortestEdge(
             [self.cfg.INPUT.MIN_SIZE_TEST, self.cfg.INPUT.MIN_SIZE_TEST],
-            self.cfg.INPUT.MAX_SIZE_TEST,
+            self.cfg.INPUT.MAX_SIZE_TEST
         )
 
-        self.predictor = DefaultPredictor(self.cfg)
-        self.model = self.predictor.model.eval()
-
-    def _boxes_to_uniter_7d(self, boxes, img_h, img_w):
+    @torch.no_grad()
+    def embed_image(self, image_input: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Convert boxes to normalised UNITER-style 7D position features.
-
-        boxes: numpy array [N, 4], format [x1, y1, x2, y2]
-        return: numpy array [N, 7]
+        Args:
+            image_input: PyTorch Tensor of shape (3, H, W) with values [0.0, 1.0] or [0, 255].
+        Returns:
+            img_feat: Tensor of shape (1, N, 2048)
+            img_feat_pos: Tensor of shape (1, N, 7)
         """
+        _, raw_height, raw_width = image_input.shape
+
+        # --- A. Preprocessing ---
+        raw_image = image_input.cpu().numpy().transpose(1, 2, 0)
+        if raw_image.max() <= 1.0:
+            raw_image = (raw_image * 255.0).astype(np.uint8)
+
+        image = self.aug.get_transform(raw_image).apply_image(raw_image)
+
+        image_tensor = torch.as_tensor(image.astype("float32").transpose(2, 0, 1), device=self.device)
+
+        inputs = [{"image": image_tensor, "height": raw_height, "width": raw_width}]
+        images = self.model.preprocess_image(inputs)
+
+        # --- B. Core Feature Extraction (Delegated to Helper) ---
+        visual_feats, final_boxes = self._extract_region_features(
+            images,
+            resized_hw=image_tensor.shape[1:],
+            raw_height=raw_height,
+            raw_width=raw_width
+        )
+
+        # --- C. Spatial Feature Extraction ---
+        loc_feats = self._compute_location_features(final_boxes, raw_width, raw_height)
+
+        return visual_feats.unsqueeze(0), loc_feats.unsqueeze(0)
+
+    def _extract_region_features(self, images, resized_hw, raw_height, raw_width):
+        """
+        Helper function to run the backbone, RPN, RoI heads, and NMS.
+        Returns visual features and refined bounding boxes.
+        """
+        # Run Backbone & RPN
+        features = self.model.backbone(images.tensor)
+        proposals, _ = self.model.proposal_generator(images, features, None)
+        proposal_boxes = [x.proposal_boxes for x in proposals]
+
+        # RoI Transform & Res5
+        features_list = [features[f] for f in self.model.roi_heads.in_features]
+        box_features = self.model.roi_heads._shared_roi_transform(features_list, proposal_boxes)
+        feature_pooled = box_features.mean(dim=[2, 3])
+
+        # Box Refinement
+        predictions = self.model.roi_heads.box_predictor(feature_pooled)
+        boxes = self.model.roi_heads.box_predictor.predict_boxes(predictions, proposals)[0]
+        probs = self.model.roi_heads.box_predictor.predict_probs(predictions, proposals)[0]
+
+        # Single-Pass NMS
+        instances, ids = fast_rcnn_inference_single_image(
+            boxes, probs, resized_hw,
+            score_thresh=0.2, nms_thresh=0.5, topk_per_image=self.max_proposals
+        )
+
+        # Postprocess & Feature Selection
+        instances = detector_postprocess(instances, raw_height, raw_width)
+        visual_feats = feature_pooled[ids].detach()
+        final_boxes = instances.pred_boxes.tensor
+
+        return visual_feats, final_boxes
+
+    def _compute_location_features(self, boxes: torch.Tensor, image_width: int, image_height: int) -> torch.Tensor:
+        """Computes the 7D normalized spatial vectors from the refined boxes."""
+        if boxes.shape[0] == 0:
+            return torch.zeros((1, 7), device=self.device)
+
         x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+        box_width, box_height = x2 - x1, y2 - y1
 
-        box_w = np.maximum(x2 - x1, 0)
-        box_h = np.maximum(y2 - y1, 0)
-        area = box_w * box_h
+        loc_feats = torch.stack([
+            x1 / image_width,
+            y1 / image_height,
+            x2 / image_width,
+            y2 / image_height,
+            box_width / image_width,
+            box_height / image_height,
+            (box_width * box_height) / (image_width * image_height)
+        ], dim=1)
 
-        pos = np.stack(
-            [
-                x1 / img_w,
-                y1 / img_h,
-                x2 / img_w,
-                y2 / img_h,
-                box_w / img_w,
-                box_h / img_h,
-                area / (img_w * img_h),
-                ],
-            axis=1,
-        )
+        return loc_feats
 
-        return pos.astype("float32")
-
-    def embed_image(self, img):
-        """
-        :param img: numpy image, RGB, shape [H, W, 3]
-        :return:
-            img_feat: torch.FloatTensor [1, N, 2048]
-            img_pos:  torch.FloatTensor [1, N, 7]
-        """
-        img_h, img_w = img.shape[:2]
-
-        # Detectron2 expects BGR
-        img_bgr = img[:, :, ::-1]
-
-        transform = self.aug.get_transform(img_bgr)
-        img_trans = transform.apply_image(img_bgr)
-
-        img_tensor = torch.as_tensor(
-            img_trans.astype("float32").transpose(2, 0, 1),
-            device=self.device,
-        )
-
-        inputs = [
-            {
-                "image": img_tensor,
-                "height": img_h,
-                "width": img_w,
-            }
-        ]
-
-        with torch.no_grad():
-            images = self.model.preprocess_image(inputs)
-            features = self.model.backbone(images.tensor)
-
-            proposals, _ = self.model.proposal_generator(
-                images, features, None
-            )
-
-            # Run ROI heads to obtain final detected instances.
-            results, _ = self.model.roi_heads(
-                images, features, proposals, None
-            )
-
-            instances = results[0]
-
-            if len(instances) == 0:
-                raise RuntimeError("No detected boxes found for this image.")
-
-            boxes = instances.pred_boxes.tensor
-            scores = instances.scores
-
-            # Keep top-K final detections.
-            k = min(self.top_k, boxes.shape[0])
-            topk = torch.argsort(scores, descending=True)[:k]
-            boxes = boxes[topk]
-
-            # C4 / Res5ROIHeads path.
-            if not (
-                    hasattr(self.model.roi_heads, "pooler")
-                    and hasattr(self.model.roi_heads, "res5")
-            ):
-                raise RuntimeError(
-                    f"This implementation expects C4 Res5ROIHeads, "
-                    f"but got {type(self.model.roi_heads)}"
-                )
-
-            final_boxes = [Boxes(boxes)]
-
-            box_features = self.model.roi_heads.pooler(
-                [features[f] for f in self.model.roi_heads.in_features],
-                final_boxes,
-            )
-
-            # [N, 2048, H, W]
-            box_features = self.model.roi_heads.res5(box_features)
-
-            # [N, 2048]
-            box_features = box_features.mean(dim=[2, 3])
-
-            region_features = box_features.detach().cpu().numpy().astype("float32")
-            final_boxes_np = boxes.detach().cpu().numpy().astype("float32")
-
-        pos_7d = self._boxes_to_uniter_7d(final_boxes_np, img_h, img_w)
-
-        img_feat = region_features[None, :, :]
-        img_pos = pos_7d[None, :, :]
-
-        assert img_feat.shape[2] == 2048, f"Expected 2048 image dim, got {img_feat.shape[2]}"
-        assert img_pos.shape[2] == 7, f"Expected 7 box dim, got {img_pos.shape[2]}"
-        assert img_feat.shape[1] == img_pos.shape[1], (
-            f"N mismatch: img_feat has {img_feat.shape[1]}, "
-            f"img_pos has {img_pos.shape[1]}"
-        )
-
-        return (
-            torch.from_numpy(img_feat).to(self.device),
-            torch.from_numpy(img_pos).to(self.device),
-        )
 class CandidateCaptionEmbedder:
     def __init__(self, device="cuda"):
         """
