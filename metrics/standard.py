@@ -6,7 +6,7 @@ class StandardMetric(BaseMetric):
     def __init__(self):
         pass  # No setup or device needed for standard metrics
 
-    def compute_score(self, gts, gen, ims_cs=None, gen_cs=None, gts_cs=None):
+    def compute_score(self, gen_cs, gts_cs, **kwargs):
         all_scores = {}
         all_scores_metrics = get_all_metrics(gts_cs, gen_cs)
 
