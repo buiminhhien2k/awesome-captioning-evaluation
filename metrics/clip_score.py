@@ -57,7 +57,7 @@ class ClipScoreMetric(BaseMetric):
         self.load_model()
 
 
-    def compute_score(self, ims_cs, gen_cs, gts_cs=None, gts=None, gen=None):
+    def compute_score(self, ims_cs, gen_cs, gts_cs=None):
         if self.model is None:
             raise RuntimeError(
                 "CLIP model not initialized. Call setup() first.")
