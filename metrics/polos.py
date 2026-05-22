@@ -1,43 +1,79 @@
+import time
 import numpy as np
+from PIL import Image
+
 from .base_metric import BaseMetric
 from models.polos.models import download_model, load_checkpoint
-from PIL import Image
 
 
 class PolosMetric(BaseMetric):
-    def __init__(self, device="cuda"):
+    METRIC_NAME = "POLOS"
+
+    def __init__(self, device: str = "cuda"):
         self.device = device
         self.model = None
-        self.metric_name = "polos"
 
-    def setup(self):
+    @property
+    def requires_references(self) -> bool:
+        return True
+
+    def setup(self) -> None:
         self.load_model()
-    def load_model(self, **kwargs):
+
+    def load_model(self, **kwargs) -> None:
         model_path = download_model("polos")
         self.model = load_checkpoint(model_path)
 
-    def prepare_polos_dict(self, ims_cs, gen_cs, gts_cs):
-        polos_dict = []
-        for i, (im, gen, gts) in enumerate(zip(ims_cs, gen_cs, gts_cs)):
-            curr = {
-                'img': Image.open(im).convert("RGB"),
-                'mt': gen,
-                'refs': gts
-            }
-            polos_dict.append(curr)
-        return polos_dict
-
-    def compute_score(self, ims_cs, gen_cs, gts_cs=None, gts=None, gen=None):
+    def compute_score(
+            self,
+            ims_cs: list[str],
+            gen_cs: list[str],
+            gts_cs: list[list[str]],
+            **kwargs,
+    ):
+        start_time = time.perf_counter()
         if self.model is None:
             raise RuntimeError(
-                "Polos model not initialized. Call setup() first.")
+                "POLOS model not initialized. Call setup() first."
+            )
 
-        self.polos_dict = self.prepare_polos_dict(ims_cs, gen_cs, gts_cs)
+        polos_inputs = self._prepare_inputs(
+            ims_cs=ims_cs,
+            gen_cs=gen_cs,
+            gts_cs=gts_cs,
+        )
 
         _, scores = self.model.predict(
-            self.polos_dict, batch_size=10, cuda=(self.device == "cuda"))
-        # print(_, scores)
-        return {f"{self.metric_name}": {
-            "overall":np.mean(scores),
-            "score_per_cap": scores}
+            polos_inputs,
+            batch_size=10,
+            cuda=(self.device == "cuda"),
+        )
+
+        elapsed_seconds = time.perf_counter() - start_time
+
+        return {
+            self.METRIC_NAME: {
+                "overall": float(np.mean(scores)),
+                "score_per_cap": scores,
+                "time": elapsed_seconds,
+            }
         }
+
+    def _prepare_inputs(
+            self,
+            ims_cs: list[str],
+            gen_cs: list[str],
+            gts_cs: list[list[str]],
+    ) -> list[dict]:
+        return [
+            {
+                "img": Image.open(image_path).convert("RGB"),
+                "mt": candidate_caption,
+                "refs": references,
+            }
+            for image_path, candidate_caption, references in zip(
+                ims_cs,
+                gen_cs,
+                gts_cs,
+            )
+        ]
