@@ -1,69 +1,15 @@
 import torch
 import json
-import evaluation
 import os
 
 from metrics.clip_image_score import ClipImageScore
 from metrics.clip_score import ClipScoreMetric
+from metrics.mid_score import MIDScore
 from metrics.polos import PolosMetric
 from metrics.standard import StandardMetric
 from metrics.bert_score import BertScoreBasic, BertScoreImproved
 from metrics.umic_score import UmicScore
 from metrics.blip2_score import Blip2ScoreMetric
-
-
-def collate_fn(batch):
-    if isinstance(batch, tuple) and isinstance(batch[0], list):
-        return batch
-    elif isinstance(batch, list):
-        transposed = list(zip(*batch))
-        return [collate_fn(samples) for samples in transposed]
-    return torch.utils.data.default_collate(batch)
-
-
-def prepare_json(file_json, data_dir, image_dir):
-    with open(f'{data_dir}/reference_captions.json', 'r') as f:
-        references = json.load(f)
-
-    # check if file exist
-    if os.path.isfile(f'{data_dir}/{file_json}'):
-        with open(f'{data_dir}/{file_json}', 'r') as f:
-            data = json.load(f)
-    else:
-        print(
-            f"File {file_json} not found in test_captions/.")
-
-    gen_tokenized = {}
-    gts_tokenized = {}
-
-    image_paths  : list[str] = list()
-    cand_captions: list[str] = list()
-    refs_captions: list[list[str]] = list()
-    human_scores : list[float] = list()
-
-    for i, data in enumerate(data):  # k = name img, v=cand
-        assert isinstance(data, dict)
-        image_id: str = data["image-id"] # required field
-        cand_caption: str = data["cand-caption"] # required field
-        human_score: float|None = data.get("human-score", None) # optional field
-        # human score can be null depending on the purpose of using this benchmark
-
-        img_path = f'{image_dir}/{image_id}'
-
-        refs_captions_i = references[image_id]
-        gen_tokenized['%d' % (i)] = [cand_caption, ]
-        gts_tokenized['%d' % (i)] = refs_captions_i
-
-        image_paths.append(img_path)
-        cand_captions.append(cand_caption)
-        refs_captions.append(refs_captions_i)
-        human_scores.append(human_score)
-
-    gts_tokenized = evaluation.PTBTokenizer.tokenize(gts_tokenized)
-    gen_tokenized = evaluation.PTBTokenizer.tokenize(gen_tokenized)
-
-
-    return gts_tokenized, gen_tokenized, image_paths, cand_captions, refs_captions, human_scores
 
 
 def get_metric(name, **kwargs):
@@ -84,5 +30,38 @@ def get_metric(name, **kwargs):
         return UmicScore()
     elif name == "blip2-score":
         return Blip2ScoreMetric()
+    elif name == "mid-score":
+        return MIDScore(kwargs.get("device"))
     else:
         raise ValueError(f"Unknown metric: {name}")
+
+
+def save_metric_scores_jsonl(scores, dataset, file_json, asset_dir="asset"):
+    os.makedirs(asset_dir, exist_ok=True)
+
+    save_path = os.path.join(
+        asset_dir,
+        f"{dataset}_{os.path.splitext(file_json)[0]}_scores.jsonl"
+    )
+
+    # Load existing rows
+    existing_rows = {}
+
+    if os.path.exists(save_path):
+        with open(save_path, "r", encoding="utf-8") as f:
+            for line in f:
+                row = json.loads(line)
+                existing_rows[row["metric_name"]] = row
+
+    # Replace / update rows
+    for metric_name, metric_result in scores.items():
+
+        existing_rows[metric_name] = {
+            "metric_name": metric_name,
+            "scores": [round(score,7) for score in metric_result["score_per_cap"]]
+        }
+
+    # Rewrite file
+    with open(save_path, "w", encoding="utf-8") as f:
+        for row in existing_rows.values():
+            f.write(json.dumps(row) + "\n")
