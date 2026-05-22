@@ -1,106 +1,178 @@
+import time
+from collections import OrderedDict
+from typing import Any
 
 import torch
-import numpy as np
-
+import tqdm
+from omegaconf import DictConfig, ListConfig, OmegaConf
 from PIL import Image
-from omegaconf import OmegaConf, ListConfig, DictConfig
 
 from metrics.base_metric import BaseMetric
 from models.blip2.model.blip2_image_text_matching import Blip2ITM
-from models.blip2.processor.blip_processor import BlipImageEvalProcessor, BlipCaptionProcessor
-
-from typing import Union
+from models.blip2.processor.blip_processor import (
+    BlipCaptionProcessor,
+    BlipImageEvalProcessor,
+)
 
 
 class Blip2ScoreMetric(BaseMetric):
-    def __init__(self, batch_size=12):
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model_cls = Blip2ITM()
-        self.BATCH_SIZE = batch_size
+    METRIC_NAME = "BLIP2-score"
 
-    def setup(self):
+    def __init__(self, batch_size: int = 32):
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.batch_size = batch_size
+        self.cache_limit = 5000
+
+        self.model_cls = Blip2ITM()
+        self.model = None
+        self.vis_processor = None
+        self.txt_processor = None
+
+    @property
+    def requires_references(self) -> bool:
+        return False
+
+    def setup(self) -> None:
         self.load_model()
 
-    def load_model(self, **kwargs):
-        self.model = self.model_cls.from_pretrained(model_type="pretrain_vitL").to(self.device)
+    def load_model(self, **kwargs) -> None:
+        self.model = (
+            self.model_cls
+            .from_pretrained(model_type="pretrain_vitL")
+            .to(self.device)
+        )
         self.model.eval()
 
-        cfg = OmegaConf.load(self.model_cls.default_config_path("pretrain_vitL"))
-        self.vis_processor, self.txt_processor = self.load_process(cfg.preprocess)
+        cfg = OmegaConf.load(
+            self.model_cls.default_config_path("pretrain_vitL")
+        )
 
-    def _build_proc_from_cfg(self, cfg: Union[DictConfig, ListConfig]):
-        assert cfg is not None
-        assert cfg.name in ("blip_image_eval", "blip_caption")
-        if cfg.name == "blip_image_eval":
-            return BlipImageEvalProcessor.from_config(cfg)
-        else :
-            return BlipCaptionProcessor.from_config(cfg)
+        self.vis_processor, self.txt_processor = self._load_processors(
+            cfg.preprocess
+        )
 
-    def load_process(self, config: Union[DictConfig, ListConfig]):
-        """
-        Load preprocessor configs and construct preprocessors.
+    def compute_score(
+            self,
+            ims_cs: list[str],
+            gen_cs: list[str],
+            **kwargs,
+    ) -> dict[str, dict[str, Any]]:
+        if self.model is None or self.vis_processor is None:
+            raise RuntimeError(
+                "BLIP2 model is not initialized. Call setup() first."
+            )
 
-        If no preprocessor is specified, return BaseProcessor, which does not do any preprocessing.
+        if len(ims_cs) != len(gen_cs):
+            raise ValueError(
+                "Length mismatch: `ims_cs` and `gen_cs` must have the same length."
+            )
 
-        Args:
-            config (ListConfig, DictConfig): preprocessor configs.
+        start_time = time.perf_counter()
 
-        Returns:
-            vis_processors (dict): preprocessors for visual inputs.
-            txt_processors (dict): preprocessors for text inputs.
+        score_per_cap = self._compute_blip2_scores(
+            ims_cs=ims_cs,
+            gen_cs=gen_cs,
+        )
 
-            Key is "train" or "eval" for processors used in training and evaluation respectively.
-        """
+        elapsed_seconds = time.perf_counter() - start_time
 
-        vis_proc_cfg = config.get("vis_processor")
-        txt_proc_cfg = config.get("text_processor")
-        if vis_proc_cfg is not None:
-            vis_eval_cfg = vis_proc_cfg.get("eval")
-        else:
-            vis_eval_cfg = None
-        vis_processor = self._build_proc_from_cfg(vis_eval_cfg)
+        return {
+            self.METRIC_NAME: {
+                "overall": sum(score_per_cap) / len(score_per_cap),
+                "score_per_cap": score_per_cap,
+                "time": elapsed_seconds,
+            }
+        }
 
-        if txt_proc_cfg is not None:
-            txt_eval_cfg = txt_proc_cfg.get("eval")
-        else:
-            txt_eval_cfg = None
+    def _compute_blip2_scores(
+            self,
+            ims_cs: list[str],
+            gen_cs: list[str],
+    ) -> list[float]:
+        scores = []
+        cached_processed_images = OrderedDict()
 
-        txt_processor = self._build_proc_from_cfg(txt_eval_cfg)
+        with torch.no_grad():
+            for start_idx in tqdm.tqdm(
+                    range(0, len(ims_cs), self.batch_size)
+            ):
+                end_idx = min(len(ims_cs), start_idx + self.batch_size)
+
+                image_batch = ims_cs[start_idx:end_idx]
+                caption_batch = gen_cs[start_idx:end_idx]
+
+                processed_images = [
+                    self._get_cached_processed_image(
+                        img_path=image_path,
+                        cache=cached_processed_images,
+                    )
+                    for image_path in image_batch
+                ]
+
+                image_tensor = torch.cat(processed_images)
+
+                itc_score = self.model(
+                    {
+                        "image": image_tensor,
+                        "text_input": caption_batch,
+                    },
+                    match_head="itc",
+                )
+
+                scores.extend(itc_score[:, 0].tolist())
+
+        return scores
+
+    def _get_cached_processed_image(
+            self,
+            img_path: str,
+            cache: OrderedDict,
+    ) -> torch.Tensor:
+        if img_path in cache:
+            processed_image = cache.pop(img_path)
+            cache[img_path] = processed_image
+            return processed_image
+
+        image = Image.open(img_path).convert("RGB")
+
+        processed_image = (
+            self.vis_processor(image)
+            .unsqueeze(0)
+            .to(self.device)
+            .half()
+        )
+
+        cache[img_path] = processed_image
+
+        if len(cache) > self.cache_limit:
+            _, old_tensor = cache.popitem(last=False)
+            del old_tensor
+
+            if self.device == "cuda":
+                torch.cuda.empty_cache()
+
+        return processed_image
+
+    def _load_processors(self, config: DictConfig | ListConfig):
+        vis_cfg = config.get("vis_processor")
+        txt_cfg = config.get("text_processor")
+
+        vis_eval_cfg = vis_cfg.get("eval") if vis_cfg is not None else None
+        txt_eval_cfg = txt_cfg.get("eval") if txt_cfg is not None else None
+
+        vis_processor = self._build_processor_from_cfg(vis_eval_cfg)
+        txt_processor = self._build_processor_from_cfg(txt_eval_cfg)
 
         return vis_processor, txt_processor
 
+    def _build_processor_from_cfg(self, cfg: DictConfig | ListConfig):
+        if cfg is None:
+            raise ValueError("Processor config cannot be None.")
 
-    def compute_score(self, ims_cs, gen_cs, **kwargs):
-        """
-        :param ims_cs: Required List<String>, list of path to the image
-        :param gen_cs: Required List<String>, list candidate caption
-        :return:
-        """
+        if cfg.name == "blip_image_eval":
+            return BlipImageEvalProcessor.from_config(cfg)
 
-        assert len(ims_cs) == len(gen_cs), "len of `ims_cs` must be equal to len of `gen_cs`"
-        N = len(ims_cs)
+        if cfg.name == "blip_caption":
+            return BlipCaptionProcessor.from_config(cfg)
 
-        blip2_score = list()
-        for i in range(0, N, self.BATCH_SIZE):
-            l_idx, u_idx = i, min(N, i + self.BATCH_SIZE)
-            ims_cs_batched = ims_cs[l_idx: u_idx]
-            gen_cs_batched = gen_cs[l_idx: u_idx]
-
-            img_processed_list = list()
-            for img_path in ims_cs_batched:
-                img_pil: Image.Image = Image.open(img_path)
-                img: torch.Tensor = self.vis_processor(img_pil).unsqueeze(0).to(self.device).half()
-                # size of img is (1, 3, 224, 224)
-                img_processed_list.append(img)
-            img_cs_batched = torch.concat(img_processed_list)
-            # size of img is (BATCH_SIZE, 3, 224, 224)
-
-            itc_score: torch.Tensor = self.model({"image": img_cs_batched, "text_input": gen_cs_batched}, match_head='itc')
-            blip2_score += itc_score[:, 0].tolist()
-
-        return {
-            "Blip2-score":{
-                "overall": sum(blip2_score) / N,
-                "score_per_cap": blip2_score
-            }
-        }
+        raise ValueError(f"Unknown processor type: {cfg.name}")
