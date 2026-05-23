@@ -8,7 +8,6 @@ Estimator Base Model
 from argparse import Namespace
 from typing import Dict, List, Union
 
-import pandas as pd
 import torch
 import torch.nn as nn
 from tqdm import tqdm
@@ -85,26 +84,6 @@ class Estimator(ModelBase):
             self.loss = nn.BCELoss(reduction="sum")
         else:
             raise Exception("{} is not a valid loss option.".format(self.hparams.loss))
-
-    def read_csv(self, path: str) -> List[dict]:
-        """Reads a comma separated value file.
-
-        :param path: path to a csv file.
-
-        :return: List of records as dictionaries
-        """
-        df = pd.read_csv(path)
-        df = df[["mt","refs","score", "imgid"]]
-        refs_list = []
-        for refs in df["refs"]:
-            refs = eval(refs)
-            refs_list.append(refs)
-
-        df["refs"] = refs_list
-        df["mt"] = df["mt"].astype(str)
-        df["score"] = df["score"].astype(float)
-        df["imgid"] = df["imgid"].astype(str)
-        return df.to_dict("records")
 
     def compute_loss(
         self, model_out: Dict[str, torch.Tensor], targets: Dict[str, torch.Tensor]

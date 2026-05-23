@@ -8,7 +8,6 @@ Quality Estimator Model
 from argparse import Namespace
 from typing import Dict, List, Tuple, Union
 
-import pandas as pd
 import torch
 
 from models.polos.models.estimators import PolosEstimator, Estimator
@@ -60,19 +59,6 @@ class QualityEstimator(PolosEstimator):
             dropout=self.hparams.dropout,
         )
 
-    def read_csv(self, path: str) -> List[dict]:
-        """Reads a comma separated value file.
-
-        :param path: path to a csv file.
-
-        :return: List of records as dictionaries
-        """
-        df = pd.read_csv(path)
-        df = df[["mt", "src", "score"]]
-        df["mt"] = df["mt"].astype(str)
-        df["src"] = df["src"].astype(str)
-        df["score"] = df["score"].astype(float)
-        return df.to_dict("records")
 
     def prepare_sample(
         self, sample: List[Dict[str, Union[str, float]]], inference: bool = False

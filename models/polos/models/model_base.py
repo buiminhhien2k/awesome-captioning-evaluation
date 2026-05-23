@@ -13,7 +13,6 @@ from typing import Dict, Generator, List, Tuple, Union
 
 import click
 import numpy as np
-import pandas as pd
 import torch
 from torch.utils.data import DataLoader, RandomSampler, Subset, Dataset
 from PIL import Image
@@ -239,15 +238,6 @@ class ModelBase(torch.nn.Module):
         except KeyError:
             raise Exception(f"{self.hparams.scheduler} invalid scheduler!")
 
-    def read_csv(self, path: str) -> List[dict]:
-        """Reads a comma separated value file.
-
-        :param path: path to a csv file.
-
-        :return: List of records as dictionaries
-        """
-        df = pd.read_csv(path)
-        return df.to_dict("records")
 
     def freeze_encoder(self) -> None:
         """ Freezes the encoder layer. """

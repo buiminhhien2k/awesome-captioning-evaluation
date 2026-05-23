@@ -2,7 +2,6 @@
 import os
 
 import click
-# import pandas as pd
 import yaml
 import torch
 

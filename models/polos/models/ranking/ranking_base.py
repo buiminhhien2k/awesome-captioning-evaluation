@@ -8,7 +8,6 @@ Translation Ranking Base Model
 from argparse import Namespace
 from typing import List
 
-import pandas as pd
 import torch
 import torch.nn as nn
 
@@ -31,21 +30,6 @@ class RankingBase(ModelBase):
         hparams: Namespace,
     ) -> None:
         super().__init__(hparams)
-
-    def read_csv(self, path: str) -> List[dict]:
-        """Reads a comma separated value file.
-
-        :param path: path to a csv file.
-
-        :return: List of records as dictionaries
-        """
-        df = pd.read_csv(path)
-        df = df[["src", "ref", "pos", "neg"]]
-        df["src"] = df["src"].astype(str)
-        df["ref"] = df["ref"].astype(str)
-        df["pos"] = df["pos"].astype(str)
-        df["neg"] = df["neg"].astype(str)
-        return df.to_dict("records")
 
     def _build_loss(self):
         """ Initializes the loss function/s. """
