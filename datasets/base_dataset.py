@@ -30,10 +30,10 @@ class BaseDataset(ABC):
         )
 
     def has_references(self) -> bool:
-        return any(sample.get("references") for sample in self.samples)
+        return all(sample.get("references") for sample in self.samples)
 
     def has_human_scores(self) -> bool:
-        return any(sample.get("human_score") is not None for sample in self.samples)
+        return all(sample.get("human_score") is not None for sample in self.samples)
 
     def require_references(self) -> None:
         if not self.has_references():

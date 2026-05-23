@@ -1,12 +1,10 @@
 from .base_dataset import BaseDataset
 from .standard_caption_dataset import StandardCaptionDataset
 from .reference_free_dataset import ReferenceFreeDataset
-from .raw_image_caption_dataset import RawImageCaptionDataset
 
 DATASET_CLASSES = {
     "StandardCaptionDataset": StandardCaptionDataset,
     "ReferenceFreeDataset": ReferenceFreeDataset,
-    "RawImageCaptionDataset": RawImageCaptionDataset,
 }
 
 
@@ -35,7 +33,7 @@ def build_dataset(
         dataset_name: str,
         candidate_file: str,
         config: dict,
-):
+) -> BaseDataset:
     dataset_cls = get_dataset_class(config["dataset_class"])
 
     return dataset_cls(

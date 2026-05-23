@@ -1,11 +1,4 @@
-flickrCrowdflower:
-  dataset_class: StandardCaptionDataset
-  captions_root: test_captions
-  image_root: data
-  excluded_files:
-    - reference_captions.json
-
-flickrExpert:
+flickr8k:
   dataset_class: StandardCaptionDataset
   captions_root: test_captions
   image_root: data
@@ -26,15 +19,8 @@ polaris:
   excluded_files:
     - reference_captions.json
 
-noref: # dummy example
+noref_dataset: # dummy example, this is an example of how to config a reference free dataset
   dataset_class: ReferenceFreeDataset
-  captions_root: test_captions
-  image_root: data
-  excluded_files:
-    - reference_captions.json
-
-rawimage: # dummy example
-  dataset_class: RawImageCaptionDataset
   captions_root: test_captions
   image_root: data
   excluded_files:
