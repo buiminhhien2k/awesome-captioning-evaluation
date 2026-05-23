@@ -94,7 +94,6 @@ class ClipScoreMetric(BaseMetric):
         }
 
         if self._has_references(gts_cs):
-            ref_start = time.perf_counter()
 
             ref_scores = self._compute_reference_scores(
                 gts_cs=gts_cs,
@@ -102,7 +101,7 @@ class ClipScoreMetric(BaseMetric):
                 candidate_feats=candidate_feats,
             )
 
-            ref_elapsed = time.perf_counter() - ref_start
+            ref_elapsed = time.perf_counter() - start_time
 
             scores[f"Ref_{metric_name}"] = {
                 "overall": float(np.mean(ref_scores)),
