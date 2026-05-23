@@ -19,7 +19,7 @@ from .base_metric import BaseMetric
 
 
 class BertScoreBasic(BaseMetric):
-    METRIC_NAME = "BERTScore F1-score"
+    METRIC_NAME = "BERTScore"
 
     def __init__(self, lang: str = "en"):
         self.lang = lang
@@ -63,7 +63,7 @@ class BertScoreBasic(BaseMetric):
 
 
 class BertScoreImproved(BaseMetric):
-    METRIC_NAME = "BERTScore++ F1-score"
+    METRIC_NAME = "BERTScore++"
 
     def __init__(
             self,

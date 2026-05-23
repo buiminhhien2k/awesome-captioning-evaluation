@@ -1,13 +1,25 @@
-from detectron2.modeling import build_model
+import math
+import time
+from collections import OrderedDict
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torchvision.transforms.functional as F
+import tqdm
+from PIL import Image
+from transformers import BertTokenizer
+
 from detectron2.checkpoint import DetectionCheckpointer
-import detectron2.data.transforms as T
 from detectron2.config import get_cfg
+import detectron2.data.transforms as T
+from detectron2.modeling import build_model
 from detectron2.modeling.postprocessing import detector_postprocess
 from detectron2.modeling.roi_heads.fast_rcnn import fast_rcnn_inference_single_image
 
-import torch.nn as nn
-
-import torchvision.transforms.functional as F
+from .base_metric import BaseMetric
+from models.uniter.ce import UniterForCaptioningMetric
+from utils.config import load_model_paths
 
 """
     HOW TO INSTALL Detectron2? if you cannot install with the standard method like this
@@ -17,139 +29,210 @@ import torchvision.transforms.functional as F
     this is how I installed Detectron2
     pip install --extra-index-url https://miropsota.github.io/torch_packages_builder detectron2==0.6+18f6958pt2.8.0cu129
 """
-import torch
-import numpy as np
 
-import tqdm
-
-from .base_metric import BaseMetric
-from transformers import BertTokenizer
-
-from models.uniter.ce import UniterForCaptioningMetric
-from models.uniter.model import UniterModel
-from utils.config import load_model_paths
-
-from PIL import Image
-
-import math
 
 class UmicScore(BaseMetric):
-    """
-    This class reproduce the UMIC score which can be applied for ANY new dataset.
-    That is the major difference from this class to the [UMIC](https://github.com/hwanheelee1993/UMIC).
-    The original work already pre-embedded images of the common datasets like: COMPOSITE, FLICKR, etc.
-    Because this class serve a more generic purpose so it would take longer time to run since
-    it requires Detectron2 to detect the bounding boxes and its corresponding feature vectors
-    in any images (please view the UNITER model on how to use detectron2)
-    """
+    METRIC_NAME = "UMIC-Score"
 
-    def __init__(self, rcnn_file="faster_rcnn_R_101_C4_3x.yaml"):
-        """
-        :param rcnn_file: name of yaml file to configure detectron2
-        """
+    def __init__(self,):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.rcnn_file = rcnn_file
-        self.IMAGE_DIM = 1024 if self.rcnn_file == "faster_rcnn_R_101_FPN_3x.yaml" else 2048
+        self.image_dim = 2048
 
-        
-    def setup(self):
-        # this class heavily depend on detectron2, is used to embed the input images
+
+        self.model_paths = load_model_paths()
+
+        self.imageEmbedder = None
+        self.candidateTextEmbedder = None
+        self.umicModel = None
+
+    @property
+    def requires_references(self) -> bool:
+        return False
+
+    def setup(self) -> None:
         self.load_model()
 
-    def load_model(self):
+    def load_model(self) -> None:
         self.imageEmbedder = ImageFeatureEmbedder(
-            "config/COCO-Detection/" + "faster_rcnn_R_101_C4_caffe.yaml" ,
-            'checkpoints/faster_rcnn_from_caffe_attr_original.pkl', device=self.device)
-        self.candidateTextEmbedder = CandidateCaptionEmbedder(self.device)
-
-        # You need to have `umic.pt` file in checkpoints folder
-        # `umic.pt` can be download from here https://archive.org/download/umic_data/umic.pt sourced in
-        # the author of UMIC metric repository
-        # https://github.com/hwanheelee1993/UMIC?tab=readme-ov-file#-2-download-the-pretrained-model-
-        umic_state = torch.load(load_model_paths()["umic"])
-        self.umicModel = UniterForCaptioningMetric.from_pretrained(
-            config_file="config/uniter-config/uniter-base.json",
-            state_dict=umic_state,
-            img_dim=self.IMAGE_DIM
+            cfg_path=self.model_paths["detectron2_cfg"],
+            weights_path=self.model_paths["detectron2_weights"],
+            device=self.device,
         )
+
+        self.candidateTextEmbedder = CandidateCaptionEmbedder(
+            device=self.device,
+        )
+
+        umic_state = torch.load(
+            self.model_paths["umic"],
+            map_location=self.device,
+        )
+
+        self.umicModel = UniterForCaptioningMetric.from_pretrained(
+            config_file=self.model_paths["uniter_config"],
+            state_dict=umic_state,
+            img_dim=self.image_dim,
+        )
+
         self.umicModel.init_output()
         self.umicModel.to(self.device).eval()
 
-
     def compute_score(
             self,
-            ims_cs,
-            gen_cs,
-            **kwargs
-        ):
-        """
-        :param ims_cs: Required List<String>, list of path to the image
-        :param gen_cs: Required List<String>, list candidate caption
-
-        :return: Float, the UMIC score
-        """
-
-        assert len(ims_cs) == len(gen_cs), "list of ims_cs and gen_cs are expected to be the same"
-
-        rank_scores = list()
-
-        for img_path, cand_cap in tqdm.tqdm(zip(ims_cs, gen_cs), total=len(ims_cs)):
-            # TODO: This version is currently calculate UMIC score for 1-by-1 image, next task is to
-            #  use dataloader to process data in batch.
-            image = self.read_image(img_path)
-            img_feat, img_box = self.imageEmbedder.embed_image(image)
-            img_mask = torch.ones(1, img_feat.shape[1], dtype=torch.long).to(self.device)
-
-            cand_input_ids, cand_input_masks = self.candidateTextEmbedder.tokenize(cand_cap)
-
-            # size of joint_mask is: N + L + 2
-            # plus 2 tokens because the CLS (id=101) and SEP (id=102)
-            # L is the number of token of cand_cap, or number of tokens of the longest caption in a batch
-            joint_mask = torch.cat([img_mask, cand_input_masks], dim=1).to(self.device)
-            position_ids = torch.arange(cand_input_ids.shape[1], dtype=torch.long, device=self.device)
-            gather_ids = torch\
-                .arange(cand_input_ids.shape[1] + img_feat.shape[1], dtype=torch.long, device=self.device)\
-                .unsqueeze(0)
-
-            batch = {
-                "input_ids": cand_input_ids,
-                "position_ids": position_ids,
-                "img_feat": img_feat,
-                "img_pos_feat": img_box,
-                "attn_masks": joint_mask,
-                "gather_index": gather_ids,
-            }
-
-            scores = self.umicModel(
-                batch=batch,
-                compute_loss=False
+            ims_cs: list[str],
+            gen_cs: list[str],
+            cache_limit: int = 5000,
+            **kwargs,
+    ):
+        if self.umicModel is None:
+            raise RuntimeError(
+                "UMIC model not initialized. Call setup() first."
             )
 
-            rank_scores += [scores.squeeze().detach().cpu().numpy()]
-        # this step is refer to UMIC repository
-        umic_score = [1/(1+math.exp(-rank_score)) for rank_score in rank_scores] # sigmoid
+        if len(ims_cs) != len(gen_cs):
+            raise ValueError(
+                "`ims_cs` and `gen_cs` must have the same length."
+            )
 
-        return {"umic-score": {
-            "overall": sum(umic_score) / len(umic_score),
-            "score_per_cap": umic_score
+        start_time = time.perf_counter()
+
+        rank_scores = self._compute_rank_scores(
+            ims_cs=ims_cs,
+            gen_cs=gen_cs,
+            cache_limit=cache_limit,
+        )
+
+        umic_scores = [
+            self._sigmoid(rank_score)
+            for rank_score in rank_scores
+        ]
+
+        elapsed_seconds = time.perf_counter() - start_time
+
+        return {
+            self.METRIC_NAME: {
+                "overall": float(np.mean(umic_scores)),
+                "score_per_cap": umic_scores,
+                "time": elapsed_seconds,
+            }
         }
+
+    def _compute_rank_scores(
+            self,
+            ims_cs: list[str],
+            gen_cs: list[str],
+            cache_limit: int,
+    ) -> list[float]:
+        rank_scores = []
+        cached_image_features = OrderedDict()
+
+        with torch.no_grad():
+            for img_path, cand_caption in tqdm.tqdm(
+                    zip(ims_cs, gen_cs),
+                    total=len(ims_cs),
+            ):
+                img_feat, img_box = self._get_cached_image_features(
+                    img_path=img_path,
+                    cache=cached_image_features,
+                    cache_limit=cache_limit,
+                )
+
+                batch = self._build_uniter_batch(
+                    img_feat=img_feat,
+                    img_box=img_box,
+                    cand_caption=cand_caption,
+                )
+
+                score = self.umicModel(
+                    batch=batch,
+                    compute_loss=False,
+                )
+
+                rank_scores.append(
+                    float(score.squeeze().detach().cpu())
+                )
+
+        return rank_scores
+
+    def _get_cached_image_features(
+            self,
+            img_path: str,
+            cache: OrderedDict,
+            cache_limit: int,
+    ):
+        if img_path in cache:
+            img_feat, img_box = cache.pop(img_path)
+            cache[img_path] = (img_feat, img_box)
+            return img_feat, img_box
+
+        image = self.read_image(img_path)
+
+        img_feat, img_box = self.imageEmbedder.embed_image(image)
+
+        cache[img_path] = (img_feat, img_box)
+
+        if len(cache) > cache_limit:
+            _, (old_feat, old_box) = cache.popitem(last=False)
+
+            del old_feat, old_box
+
+            if self.device == "cuda":
+                torch.cuda.empty_cache()
+
+        return img_feat, img_box
+
+    def _build_uniter_batch(
+            self,
+            img_feat: torch.Tensor,
+            img_box: torch.Tensor,
+            cand_caption: str,
+    ) -> dict:
+        img_mask = torch.ones(
+            1,
+            img_feat.shape[1],
+            dtype=torch.long,
+            device=self.device,
+        )
+
+        cand_input_ids, cand_input_masks = (
+            self.candidateTextEmbedder.tokenize(cand_caption)
+        )
+
+        joint_mask = torch.cat(
+            [img_mask, cand_input_masks],
+            dim=1,
+        )
+
+        position_ids = torch.arange(
+            cand_input_ids.shape[1],
+            dtype=torch.long,
+            device=self.device,
+        )
+
+        gather_ids = torch.arange(
+            cand_input_ids.shape[1] + img_feat.shape[1],
+            dtype=torch.long,
+            device=self.device,
+            ).unsqueeze(0)
+
+        return {
+            "input_ids": cand_input_ids,
+            "position_ids": position_ids,
+            "img_feat": img_feat,
+            "img_pos_feat": img_box,
+            "attn_masks": joint_mask,
+            "gather_index": gather_ids,
         }
-    @classmethod
-    def read_image(self, image_path: str) -> torch.Tensor:
-        """
-        Reads an image from disk and converts it to a normalized PyTorch tensor.
 
-        Returns:
-            Tensor of shape (3, H, W) with values in range [0.0, 1.0]
-        """
-        # 1. Open the image and force it to 3-channel RGB
-        image = Image.open(image_path).convert('RGB')
+    @staticmethod
+    def _sigmoid(value: float) -> float:
+        return 1.0 / (1.0 + math.exp(-value))
 
-        # 2. to_tensor() automatically converts the PIL Image to a FloatTensor,
-        # permutes dimensions to (C, H, W), and scales pixels down from [0, 255] to [0.0, 1.0].
-        image_tensor = F.to_tensor(image)
+    @staticmethod
+    def read_image(image_path: str) -> torch.Tensor:
+        image = Image.open(image_path).convert("RGB")
+        return F.to_tensor(image)
 
-        return image_tensor
 
 class ImageFeatureEmbedder:
     """

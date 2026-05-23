@@ -4,13 +4,21 @@ from .base_metric import BaseMetric
 from models import clip
 import torch
 from PIL import Image
+import time
 
 class MIDScore(BaseMetric):
+    METRIC_NAME = "MID-Score"
+
     def __init__(self, device=None):
         self.device = device
         self.prefix = 'A photo depicts '
         self.batch_size = 128
-        self.scaler_min, self.scaler_max = -550 , 0
+        self.mid_scaler_min, self.mid_scaler_max = -550 , 0
+        self.refmid_scaler_min, self.refmid_scaler_max = -250 , 50
+    @property
+    def requires_references(self) -> bool:
+        return True
+
     def load_model(self, **kwargs):
         """
         Loads the SDXL pipeline and applies VRAM-specific optimizations.
@@ -77,7 +85,8 @@ class MIDScore(BaseMetric):
 
     def _build_image_and_ref_embeddings(self, ims_cs, gts_cs, processed_img_dict, processed_cap_dict):
         embedded_image_list = []
-        embedded_refs_list = []
+        embedded_refs_agg_list = []
+        embedded_refs_raw_list = []
 
         for img_path, refs_list in zip(ims_cs, gts_cs):
             embedded_image_list.append(processed_img_dict[img_path])
@@ -85,18 +94,35 @@ class MIDScore(BaseMetric):
             ref_embeds = [processed_cap_dict[ref] for ref in refs_list]
             mean_ref_embed = torch.cat(ref_embeds, dim=0).mean(dim=0, keepdim=True)
 
-            embedded_refs_list.append(mean_ref_embed)
+            embedded_refs_agg_list.append(mean_ref_embed)
+            embedded_refs_raw_list.append(ref_embeds)
 
-        return embedded_image_list, embedded_refs_list
+        return embedded_image_list, embedded_refs_agg_list, embedded_refs_raw_list
 
 
-    def _prepare_mid_tensors(self, embedded_image_list, embedded_refs_list, embedded_cand_list):
+    def _prepare_mid_tensors(
+            self,
+            embedded_image_list,
+            embedded_refs_agg_list,
+            embedded_refs_raw_list,
+            embedded_cand_list):
         Y = torch.cat(embedded_image_list, dim=0).to(torch.float64)
-        X = torch.cat(embedded_refs_list, dim=0).to(torch.float64)
+        X = torch.cat(embedded_refs_agg_list, dim=0).to(torch.float64)
         X_hat = torch.cat(embedded_cand_list, dim=0).to(torch.float64)
 
         Z = torch.cat([X, Y], dim=1).to(torch.float64)
         Z_hat = torch.cat([X_hat, Y], dim=1).to(torch.float64)
+
+        cosine_list = list()
+        for embedded_refs, embedded_cand in zip(embedded_refs_raw_list, embedded_cand_list):
+            refs_mat = torch.concat(embedded_refs, dim=0) # |R| x D, with R is embedded_refs, D = 512 for clip-B/32
+            refs_mat_normed = torch.nn.functional.normalize(refs_mat, dim=1)
+
+            embedded_cand_norm = torch.nn.functional.normalize(embedded_cand, dim=1) # 1 x D
+            cosine_sim_by_R = refs_mat_normed @ embedded_cand_norm.t() # |R| x 1
+
+            cosine_list.append(max(cosine_sim_by_R.max().item(), 0))
+        cosine_sim_tensor = torch.Tensor(cosine_list).to(self.device) # N
 
         N, D = X_hat.shape
 
@@ -105,8 +131,9 @@ class MIDScore(BaseMetric):
         assert X_hat.shape == (N, D)
         assert Z.shape == (N, 2 * D)
         assert Z_hat.shape == (N, 2 * D)
+        assert cosine_sim_tensor.shape[0] == N
 
-        return X, Y, X_hat, Z, Z_hat
+        return X, Y, X_hat, Z, Z_hat, cosine_sim_tensor
 
     def _mahalanobis_diag_in_batches(self, diff, sigma_inv, batch_size):
         scores = []
@@ -160,6 +187,8 @@ class MIDScore(BaseMetric):
         return mid_scores
 
     def compute_score(self, ims_cs, gen_cs, gts_cs, **kwargs):
+        start_time = time.perf_counter()
+
         processed_cap_set, processed_img_set = set(), set()
         processed_cap_dict, processed_img_dict = {}, {}
 
@@ -194,7 +223,9 @@ class MIDScore(BaseMetric):
             processed_cap_dict=processed_cap_dict
         )
 
-        embedded_image_list, embedded_refs_list = self._build_image_and_ref_embeddings(
+        (embedded_image_list,
+         embedded_refs_agg_list,
+         embedded_refs_raw_list) = self._build_image_and_ref_embeddings(
             ims_cs=ims_cs,
             gts_cs=gts_cs,
             processed_img_dict=processed_img_dict,
@@ -202,11 +233,10 @@ class MIDScore(BaseMetric):
         )
 
         # 5. Prepare tensors
-        X, Y, X_hat, Z, Z_hat = self._prepare_mid_tensors(
-            embedded_image_list=embedded_image_list,
-            embedded_refs_list=embedded_refs_list,
-            embedded_cand_list=embedded_cand_list
-        )
+        X, Y, X_hat, Z, Z_hat, cosine_by_R = self._prepare_mid_tensors(embedded_image_list=embedded_image_list,
+                                                          embedded_refs_agg_list=embedded_refs_agg_list,
+                                                          embedded_refs_raw_list=embedded_refs_raw_list,
+                                                          embedded_cand_list=embedded_cand_list)
 
         # 6. Compute per-caption MID scores
         mid_scores = self._compute_mid_scores(
@@ -215,12 +245,26 @@ class MIDScore(BaseMetric):
             Z=Z,
             Z_hat=Z_hat
         )
-        mid_scores = (mid_scores - self.scaler_min) / (self.scaler_max - self.scaler_min)
+        elapsed_seconds = time.perf_counter() - start_time
+
+        ref_mid = (mid_scores + 1e2*cosine_by_R)/2
+        ref_mid = (ref_mid - self.refmid_scaler_min) / (self.refmid_scaler_max - self.refmid_scaler_min)
+
+
+        mid_scores = (mid_scores - self.mid_scaler_min) / (self.mid_scaler_max - self.mid_scaler_min)
         mid_scores = mid_scores.detach().cpu().tolist()
+
+        ref_mid = ref_mid.detach().cpu().tolist()
         return {
-            "mid-score": {
+            self.METRIC_NAME: {
                 "overall": sum(mid_scores) / len(mid_scores),
-                "score_per_cap": mid_scores
+                "score_per_cap": mid_scores,
+                "time": elapsed_seconds
+            },
+            f"Ref{self.METRIC_NAME}": {
+                "overall": sum(ref_mid) / len(ref_mid),
+                "score_per_cap": ref_mid,
+                "time": elapsed_seconds
             }
         }
     def setup(self,):
