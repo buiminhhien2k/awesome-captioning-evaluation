@@ -5,7 +5,8 @@ import torch
 from scipy.stats import kendalltau, pearsonr, spearmanr
 
 import utils.utils
-from datasets import build_dataset, discover_candidate_files
+from datasets import build_dataset, discover_candidate_files, BaseDataset
+from metrics.base_metric import BaseMetric
 from utils.config import load_dataset_config
 from utils.utils import get_metric
 
@@ -25,8 +26,7 @@ ACCEPTED_METRIC_TYPES = [
 ]
 
 ACCEPTED_DATASETS = [
-    "flickrExpert",
-    "flickrCrowdflower",
+    "flickr8k",
     "polaris",
     "composite",
 ]
@@ -75,9 +75,7 @@ def load_metrics(
             device=device,
             clip_model=clip_model,
         )
-
-        if metric_name != "standard":
-            metric.setup()
+        metric.setup()
 
         metrics.append(metric)
 
@@ -108,10 +106,14 @@ def compute_correlations(
 def print_metric_result(
         score_name: str,
         overall_score: float,
+        time_sec: float,
         correlations: dict[str, float] | None = None,
 ) -> None:
     if correlations is None:
-        print(f"{score_name}: {overall_score:.4f}")
+        print(
+            f"{score_name}: {overall_score:.4f},\t"
+            f"time[min]: {time_sec / 60:.2f}"
+        )
         return
 
     print(
@@ -119,19 +121,24 @@ def print_metric_result(
         f"kendall-tau b: {correlations['kendall_tau_b']:.4f},\t"
         f"kendall-tau c: {correlations['kendall_tau_c']:.4f},\t"
         f"spearman: {correlations['spearman']:.4f},\t"
-        f"pearson: {correlations['pearson']:.4f},"
+        f"pearson: {correlations['pearson']:.4f},\t"
+        f"time [min]: {(time_sec / 60):.2f}"
     )
 
 
 def evaluate_metric(
-        metric: Any,
-        dataset_name: str,
+        metric: BaseMetric,
+        dataset: BaseDataset,
         file_json: str,
         image_paths: list[str],
         candidate_captions: list[str],
         reference_captions: list[list[str] | None],
         human_scores: list[float | None],
 ) -> None:
+
+    if metric.requires_references:
+        dataset.require_references()
+
     scores = metric.compute_score(
         ims_cs=image_paths,
         gen_cs=candidate_captions,
@@ -140,11 +147,11 @@ def evaluate_metric(
 
     utils.utils.save_metric_scores_jsonl(
         scores=scores,
-        dataset=dataset_name,
+        dataset=dataset.dataset_name,
         file_json=file_json,
     )
 
-    can_compute_correlation = has_valid_human_scores(human_scores)
+    can_compute_correlation = dataset.has_human_scores()
 
     for score_name, score_data in scores.items():
         correlations = None
@@ -159,6 +166,7 @@ def evaluate_metric(
             score_name=score_name,
             overall_score=score_data["overall"],
             correlations=correlations,
+            time_sec=score_data["time"]
         )
 
 
@@ -199,7 +207,7 @@ def main() -> None:
 
             evaluate_metric(
                 metric=metric,
-                dataset_name=args.dataset,
+                dataset=dataset,
                 file_json=file_json,
                 image_paths=image_paths,
                 candidate_captions=candidate_captions,

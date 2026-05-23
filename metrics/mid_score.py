@@ -245,13 +245,13 @@ class MIDScore(BaseMetric):
             Z=Z,
             Z_hat=Z_hat
         )
-        elapsed_seconds = time.perf_counter() - start_time
+        mid_scores = (mid_scores - self.mid_scaler_min) / (self.mid_scaler_max - self.mid_scaler_min)
+        mid_score_time = time.perf_counter() - start_time
 
         ref_mid = (mid_scores + 1e2*cosine_by_R)/2
         ref_mid = (ref_mid - self.refmid_scaler_min) / (self.refmid_scaler_max - self.refmid_scaler_min)
+        refmid_score_time = time.perf_counter() - start_time
 
-
-        mid_scores = (mid_scores - self.mid_scaler_min) / (self.mid_scaler_max - self.mid_scaler_min)
         mid_scores = mid_scores.detach().cpu().tolist()
 
         ref_mid = ref_mid.detach().cpu().tolist()
@@ -259,12 +259,12 @@ class MIDScore(BaseMetric):
             self.METRIC_NAME: {
                 "overall": sum(mid_scores) / len(mid_scores),
                 "score_per_cap": mid_scores,
-                "time": elapsed_seconds
+                "time": mid_score_time
             },
             f"Ref{self.METRIC_NAME}": {
                 "overall": sum(ref_mid) / len(ref_mid),
                 "score_per_cap": ref_mid,
-                "time": elapsed_seconds
+                "time": refmid_score_time
             }
         }
     def setup(self,):

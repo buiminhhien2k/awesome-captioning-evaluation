@@ -1,4 +1,3 @@
-import torch
 import json
 import os
 
@@ -14,37 +13,38 @@ from metrics.blip2_score import Blip2ScoreMetric
 
 def get_metric(name, **kwargs):
     name = name.lower()
-    if name == "clip-score" or name == "pac-score" or name == "pac-score++":
-        return ClipScoreMetric(metric_name=name, **kwargs)
-    elif name == "polos":
-        return PolosMetric(device=kwargs.get("device"))
-    elif name == "standard":
-        return StandardMetric()
-    elif name == "bert-score":
-        return BertScoreBasic("en")
-    elif name == "bert-score++":
-        return BertScoreImproved("en")
-    elif name == "clip-image-score":
-        return ClipImageScore(kwargs.get("device"))
-    elif name == "umic-score":
-        return UmicScore()
-    elif name == "blip2-score":
-        return Blip2ScoreMetric()
-    elif name == "mid-score":
-        return MIDScore(kwargs.get("device"))
-    else:
+
+    metric_registry = {
+        "clip-score": lambda: ClipScoreMetric(metric_name=name, **kwargs),
+        "pac-score": lambda: ClipScoreMetric(metric_name=name, **kwargs),
+        "pac-score++": lambda: ClipScoreMetric(metric_name=name, **kwargs),
+
+        "polos": lambda: PolosMetric(device=kwargs.get("device")),
+        "standard": lambda: StandardMetric(),
+        "bert-score": lambda: BertScoreBasic("en"),
+        "bert-score++": lambda: BertScoreImproved("en"),
+        "clip-image-score": lambda: ClipImageScore(kwargs.get("device")),
+        "umic-score": lambda: UmicScore(),
+        "blip2-score": lambda: Blip2ScoreMetric(),
+        "mid-score": lambda: MIDScore(kwargs.get("device")),
+    }
+
+    if name not in metric_registry:
         raise ValueError(f"Unknown metric: {name}")
 
+    return metric_registry[name]()
 
 def save_metric_scores_jsonl(scores, dataset, file_json, asset_dir="asset"):
-    os.makedirs(asset_dir, exist_ok=True)
+    dataset_dir = os.path.join(asset_dir, dataset)
+    os.makedirs(dataset_dir, exist_ok=True)
+
+    file_stem = os.path.splitext(os.path.basename(file_json))[0]
 
     save_path = os.path.join(
-        asset_dir,
-        f"{dataset}_{os.path.splitext(file_json)[0]}_scores.jsonl"
+        dataset_dir,
+        f"{file_stem}_scores.jsonl"
     )
 
-    # Load existing rows
     existing_rows = {}
 
     if os.path.exists(save_path):
@@ -53,15 +53,15 @@ def save_metric_scores_jsonl(scores, dataset, file_json, asset_dir="asset"):
                 row = json.loads(line)
                 existing_rows[row["metric_name"]] = row
 
-    # Replace / update rows
     for metric_name, metric_result in scores.items():
-
         existing_rows[metric_name] = {
             "metric_name": metric_name,
-            "scores": [round(score,7) for score in metric_result["score_per_cap"]]
+            "scores": [
+                round(score, 7)
+                for score in metric_result["score_per_cap"]
+            ],
         }
 
-    # Rewrite file
     with open(save_path, "w", encoding="utf-8") as f:
         for row in existing_rows.values():
             f.write(json.dumps(row) + "\n")

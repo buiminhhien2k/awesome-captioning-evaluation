@@ -24,20 +24,22 @@ class SpiceCustomed(Spice):
         return overall, score_per_cap
 
 class StandardMetric(BaseMetric):
-    STANDARD_SCORERS = [
-        ("BLEU", Bleu(4)),
-        ("ROUGE", Rouge()),
-        ("METEOR", Meteor()),
-        ("CIDER", Cider()),
-        ("SPICE", SpiceCustomed()),
-    ]
 
     @property
     def requires_references(self) -> bool:
         return True
 
+    def setup(self):
+        self.load_model()
+
     def load_model(self, **kwargs) -> None:
-        pass
+        self.STANDARD_SCORERS = [
+            ("BLEU", Bleu(4)),
+            ("ROUGE", Rouge()),
+            ("METEOR", Meteor()),
+            ("CIDER", Cider()),
+            ("SPICE", SpiceCustomed()),
+        ]
 
     def compute_score(
             self,
@@ -102,10 +104,12 @@ class StandardMetric(BaseMetric):
             "BLEU-1": {
                 "overall": bleu_scores["overall"][0],
                 "score_per_cap": bleu_scores["score_per_cap"][0],
+                "time": bleu_scores["time"]
             },
             "BLEU-4": {
                 "overall": bleu_scores["overall"][-1],
                 "score_per_cap": bleu_scores["score_per_cap"][-1],
+                "time": bleu_scores["time"]
             },
         }
 
