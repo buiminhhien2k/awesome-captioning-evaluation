@@ -1,5 +1,11 @@
 {
   "pac-score_ViT-B/32": "checkpoints/clip_ViT-B-32.pth",
   "pac-score++_ViT-B/32": "checkpoints/PAC++_clip_ViT-B-32.pth",
-  "umic": "checkpoints/umic.pt"
+  "pac-score_ViT-L/14": "checkpoints/openClip_ViT-L-14.pth",
+  "pac-score++_ViT-L/14": "checkpoints/PAC++_clip_ViT-L-14.pth",
+
+  "umic": "checkpoints/umic.pt",
+  "detectron2_cfg": "config/COCO-Detection/faster_rcnn_R_101_C4_caffe.yaml",
+  "detectron2_weights": "checkpoints/faster_rcnn_from_caffe_attr_original.pkl",
+  "uniter_config": "config/uniter-config/uniter-base.json"
 }
