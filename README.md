@@ -64,12 +64,11 @@ data/polaris/
 
 ---
 
-### Notes
-
-- Ensure that image files are placed directly inside each dataset folder.
-- Do not create additional nested directories after extraction.
-- The benchmark expects image paths in this exact structure.
-- Missing or incorrectly placed images will cause dataset loading failures.
+> **Notes**
+> - Ensure that image files are placed directly inside each dataset folder.
+> - Do not create additional nested directories after extraction.
+> - The benchmark expects image paths in this exact structure.
+> - Missing or incorrectly placed images will cause dataset loading failures.
 
 ## Checkpoint Setup
 
@@ -100,17 +99,15 @@ Root/
 | UMIC (feature extraction) | `faster_rcnn_from_caffe_attr_original.pkl` | [Detectron2 Faster R-CNN checkpoint](http://nlp.cs.unc.edu/models/faster_rcnn_from_caffe_attr_original.pkl) | `checkpoints/` |
 | Polos | `reprod.ckpt`, `hparams.yaml` | [reprod.zip](https://polos-polaris.s3.ap-northeast-1.amazonaws.com/reprod.zip) | `checkpoints/yuigawada/reprod/` |
 
-### Notes
-
-- Metrics not listed above either do not require manual checkpoint setup or automatically download pretrained weights during first use.
-- For **Polos**, download `reprod.zip`, extract it, and preserve the original folder structure under:
+> **Notes**
+> - Metrics not listed above either do not require manual checkpoint setup or automatically download pretrained weights during first use.
+> - For **Polos**, download `reprod.zip`, extract it, and preserve the original folder structure under:
 `
 checkpoints/yuigawada/reprod/
 `
-
-- Both `reprod.ckpt` and `hparams.yaml` are required for Polos.
-- CLIP backbone weights used by CLIP-based metrics are automatically downloaded by the corresponding libraries.
-- Ensure filenames and folder structure match exactly, as some metrics rely on hardcoded checkpoint paths.
+> - Both `reprod.ckpt` and `hparams.yaml` are required for Polos.
+> - CLIP backbone weights used by CLIP-based metrics are automatically downloaded by the corresponding libraries.
+> - Ensure filenames and folder structure match exactly, as some metrics rely on hardcoded checkpoint paths.
 
 ## Environment Setup
 
