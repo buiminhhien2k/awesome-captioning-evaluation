@@ -33,7 +33,7 @@ We strongly recommend using our pre‑generated image datasets, created from can
 
 - Polaris (test set)
 
-These pregenerated datasets can be downloaded [here]()
+These pregenerated datasets can be downloaded [here](https://drive.google.com/drive/folders/1GH3jXsQrNxtZdxmNvZ3Pnp4fMgsJVnhm?usp=sharing)
 
 Using the pre‑generated images allows you to run the full evaluation pipeline even on lower‑VRAM GPUs.
 ## How to Set Up
