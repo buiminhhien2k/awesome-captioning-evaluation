@@ -39,7 +39,7 @@ Using the pre‑generated images allows you to run the full evaluation pipeline 
 ## How to Set Up
 The setup process consists of three steps:
 
-### 1. Dataset Setup  
+### [1. Dataset Setup](#1-dataset-setup)
 Prepare the datasets required for evaluation (Flickr8k, Composite, Polaris, or your own dataset).
 
 ### 2. Checkpoint Setup  
