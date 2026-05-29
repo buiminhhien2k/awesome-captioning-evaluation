@@ -39,16 +39,16 @@ Using the pre‑generated images allows you to run the full evaluation pipeline 
 ## How to Set Up
 The setup process consists of three steps:
 
-### [1. Dataset Setup](#1-dataset-setup)
+### [1. Dataset Setup](#dataset-setup)
 Prepare the datasets required for evaluation (Flickr8k, Composite, Polaris, or your own dataset).
 
-### 2. Checkpoint Setup  
+### [2. Checkpoint Setup](checkpoint-setup)  
 Download and place the model checkpoints needed for the metrics you plan to run.
 
-### 3. Environment Setup  
+### [3. Environment Setup](environment-setup)
 Install dependencies, configure CUDA/Python versions, and set up the environment for running the benchmark.
 
-## 1. Dataset Setup
+## Dataset Setup
 
 Download the image datasets and extract them into the `data/` directory.
 
@@ -118,7 +118,7 @@ data/polaris/
 > - The benchmark expects image paths in this exact structure.
 > - Missing or incorrectly placed images will cause dataset loading failures.
 
-## 2. Checkpoint Setup
+## Checkpoint Setup
 
 Some metrics require pretrained checkpoint files before evaluation. Download the required files below and place them in the expected locations.
 
@@ -157,7 +157,7 @@ checkpoints/yuigawada/reprod/
 > - CLIP backbone weights used by CLIP-based metrics are automatically downloaded by the corresponding libraries.
 > - Ensure filenames and folder structure match exactly, as some metrics rely on hardcoded checkpoint paths.
 
-## 3. Environment Setup
+## Environment Setup
 
 Run the setup script for your operating system.
 
