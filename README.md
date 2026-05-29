@@ -42,10 +42,10 @@ The setup process consists of three steps:
 ### [1. Dataset Setup](#dataset-setup)
 Prepare the datasets required for evaluation (Flickr8k, Composite, Polaris, or your own dataset).
 
-### [2. Checkpoint Setup](checkpoint-setup)  
+### [2. Checkpoint Setup](#checkpoint-setup)  
 Download and place the model checkpoints needed for the metrics you plan to run.
 
-### [3. Environment Setup](environment-setup)
+### [3. Environment Setup](#environment-setup)
 Install dependencies, configure CUDA/Python versions, and set up the environment for running the benchmark.
 
 ## Dataset Setup
