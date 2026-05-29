@@ -1,5 +1,43 @@
 # Image Captioning Evaluation 
 
+## Hardware & Software Requirements
+### Minimum requirements
+To run the benchmark, your system must meet the following baseline requirements:
+
+- **GPU: ≥ 12 GB VRAM**
+
+  - Required if you want to run CLIP‑Image‑Score.
+
+  - The benchmark in general requires GPU acceleration for all metrics.
+
+- **CUDA: 13.0 or above**
+
+- **Python: 3.13.0 or above**
+
+### Recommended Configuration
+For smooth execution—especially for metrics involving image generation—we recommend:
+
+- **GPU**: NVIDIA **RTX 3090** (24 GB VRAM) or higher
+This significantly reduces runtime for compute‑heavy metrics such as CLIP‑Image‑Score.
+
+### If Your GPU Has Less Than 12 GB VRAM
+You can still use the benchmark, but:
+
+Running **CLIP‑Image‑Score** will be extremely slow or may not fit in memory.
+
+We strongly recommend using our pre‑generated image datasets, created from candidate captions from:
+
+- Flickr8k
+
+- Composite
+
+- Polaris (test set)
+
+These datasets can be downloaded [here]()
+
+Using the pre‑generated images allows you to run the full evaluation pipeline even on lower‑VRAM GPUs.
+
+
 ## Dataset Setup
 
 Download the image datasets and extract them into the `data/` directory.
