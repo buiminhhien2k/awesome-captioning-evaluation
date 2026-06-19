@@ -6,7 +6,8 @@ from metrics.clip_score import ClipScoreMetric
 from metrics.mid_score import MIDScore
 from metrics.polos import PolosMetric
 from metrics.standard import StandardMetric
-from metrics.bert_score import BertScoreBasic, BertScoreImproved
+from metrics.bert_score import BertScoreBasic
+from metrics.bert_score_improved import BertScoreImproved
 from metrics.umic_score import UmicScore
 from metrics.blip2_score import Blip2ScoreMetric
 
